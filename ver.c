@@ -11,6 +11,17 @@
 #include "ccan/list/list.h"
 
 /**
+ * TODO:
+ *  - complete a run a simple example with counters
+ *  - figure out how to run this example in non-cache-coherent memory /
+ *    distributed memory
+ *  - handle the more complicated case of the tree, where objects consist
+ *    of versioned parts
+ *  - write a pluscal algorithm for merging
+ *  - write a simple non-balanced binary-tree
+ */
+
+/**
  * Note about nesting (transactions):
  * We try to support nested transactions conceptually, but the implementation is
  * not optimized for deep nesting, and in some cases if the nesting is too deep,
@@ -28,7 +39,40 @@
  *  - the reference count of p is decreased when a a child of p merges back
  *  - versions older than the "blessed" one with zero reference count can
  *    (should) be collected
+ *
+ * Referece counting:
+ *  linux/Documentation/kref.txt is a very good read
+ *  An important point is that if when you try to get a reference, and the
+ *  counter _can_ go to zero you need locking.
+ *
+ * Version references:
+ *  - A mutable object holds a reference to the corresponding version
+ *  - A transaction holds references to its private versions
+ *  - children versions hold references to the parent version via ->parent
+ *  - objects should also hold reference to versions (e.g., each node of the
+ *  tree holds a reference to its version)
+ *
+ * if M is the current mutable version, there is a path from M to the root
+ * of the tree (->parent == NULL): M > M1 > M2 > M3 >... > Mx > NULL
+ * We can release all versions Mi <= Mj: Mj = max{Mk <= Mj: getref(Mk) == 1}
+ *
  */
+
+/**
+ * Object GC: In the general case objects consist of nodes (e.g., a tree) and
+ *  each of those nodes holds a reference to its version. Each of these nodes
+ *  have also reference counts, since they may be referenced from other nodes
+ *  (e.g., a node might be referenced by multiple roots). When either of these
+ *  two happends:
+ *   - an object in the mutable state is replaced
+ *   - an object is discarded
+ *  the object is passed to the object-specific GC function. This function is
+ *  responsible for garbage-collecting the object. In a typical tree structure,
+ *  the GC would decrease the reference count of all nodes pointed by its
+ *  root. When a node reaches zero, it also releases its version reference.
+ */
+
+
 struct ver {
 	struct ver *parent;   // ->parrent == NULL if root of the version tree
 	atomic_t   ref_count; // reference count for this version
@@ -112,7 +156,7 @@ ver_join(ver_t *v1_orig, ver_t *v2_orig)
  * future versions.
  */
 int
-ver_merge(ver_t *tver, ver_t *mver);
+ver_merge(ver_t *tver, const ver_t *mver);
 {
 	ver_t *vj = ver_join(); //
 	obj_merge(tver, mver, vj);
@@ -124,16 +168,99 @@ ver_merge(ver_t *tver, ver_t *mver);
  */
 struct mobj {
 	ver_t  *ver;
-	spinlock_t *lock;
+	spinlock_t lock;
 }
 typedef struct mobj mobj_t;
+
+/**
+ * mobj_verget(): get a reference for the current version of the mutable object
+ *   since this might be the only reference for this particular version, we need
+ *   to take a lock to ensure that the version won't be decrefed() under our
+ *   nose. Particularly locking should ensure that no decref() to zero happens
+ *   between atomic_read() and atomic_inc(). We need to make a better reasoning
+ *   about this by considering all who might hold a reference to a version.
+ *
+ * @retries: number of retries to get the pointer
+ */
+static inline const ver_t *
+mobj_verget(mobj_t *mobj, int retries)
+{
+	ver_t *ret = VER_FAILURE;
+	do {
+		spin_lock(&mobj->lock);
+		ver_t *v = mobj->ver;
+		if (atomic_read(&v->ref_count) > 0) {
+			atomic_inc(&v->ref_count);
+			ret = v;
+		}
+		spin_unlock(&mobj->lock);
+	} while ( ret != VER_FAILURE && --retries > 0);
+	return ret;
+}
+
+/**
+ * In our model, each transaction (which is an execution context) works on its
+ * own private version of the objects. We need a way to manage versions of
+ * objects between the parent and the child execution context (all transactions
+ * of level zero, have the global mutable state as their parent execution
+ * context)
+ *
+ * We distinguish two ways to do that:
+ *
+ * a) lazily: versions are forked from the parent execution context lazily, when
+ * the context needs to access the object. This requires synchronization on the
+ * parent objects, when doing the forking, so that the new context can get a
+ * (valid) reference to the parent version.
+ *
+ * b) eagerly: versions are forked from the parent, when the new execution
+ * context is created => the new execution context acquires references to all the
+ * current versions, which become immutable. The parent execution needs to
+ * fork-of their new mutable versions. This approach can be helped by language
+ * support for what objects are modified in a transaction.
+ *
+ * The idea is to be lazy in zero-level transactions (i.e., for managing the
+ * global state), and eager in nested transactions.
+ */
+
+/**
+ * Nested transactions:
+ * For a transaction to successfully commit and update the global state, all of
+ * its children must have committed, and all objects must have been successfully
+ * merged. When a transaction is spawned from another transaction, transaction
+ * objects (or at least those that are accessed by the child transaction) need
+ * to be checkpointed -- i.e., save and make immutable the current version.
+ *
+ * Here's a motivating example:
+ *   A transaction T1 starts
+ *   T1 accesses an object O from global state -> forking version V1
+ *   V1 is private to T1, T1 is free to modify it
+ *   T2 is created inside T1:
+ *     - V1 becomes immutable, two versions are forked:
+ *          - V2 for T2
+ *          - V3 for T1
+ *  T1 needs T2 to commit, before attempting to commit to the final state and
+ *  merge V2 and V3.
+ *
+ * Note: it might be the case that a reference count in the transactions is not
+ * needed, since we can just wait for the reference count of the objects. This
+ * assumes that every nested transaction will at least fork an object from the
+ * parent transaction. Note that there not much sense in doing a nested
+ * transaction without using some of the parent's transaction objects.  The
+ * forking needs to be done eagerly anyway since the inner transaction objects
+ * should become immutable.
+ *
+ * It is not clear what happens if a nested transaction accesses an object not
+ * accessed by the parent transaction. If the parent transaction didn't access
+ * the object after creating the nested transaction, we can just add it to its
+ * set. If it did, we can try and merge the two versions.
+ */
 
 /**
  * In the general case, A (global) state can be viewed as a set of mutable
  * objects. Each transaction operates on private versions, forked from the
  * versions of the global state.
  *
- * We want to investegate if the global state needs to change atomically with
+ * We want to investigate if the global state needs to change atomically with
  * respect to transactions.
  *
  * For example, consider the following scenario:
@@ -174,11 +301,12 @@ typedef struct mobj mobj_t;
  * neded is the "blessed" version of A.  This approach is very suitable for a
  * typical file-system design, where the A tree is the tree that maps inodes to
  * files or directories.
- *
  */
 
 /**
  * Transactional objects
+ *
+ * ->ver is mutable for the owning transaction
  */
 struct vtxobj {
 	ver_t  *ver;           /* current version */
@@ -205,7 +333,7 @@ vtxobj_alloc(mobj_t *mobj, ver_t *ver, vtx_t *tx)
 	vtxo->mo = mobj;
 	vtxo->ver = ver;
 	vtxo->tx = tx;
-	if (tx != NULL)
+	if (tx != NULL) // TODO: keep sorted
 		list_add(&tx->obj_l, &new->tx_l);
 }
 
@@ -236,43 +364,55 @@ typedef struct vtx vtx_t;
 vtx_t *
 vtx_begin(vtx_t *parent_tx)
 {
+	if (parent_tx != NULL) {
+		//TODO: nested transactions
+	}
 	// alocate and initialize transaction
 }
 
+#define VTX_FAIL      (-1)
+#define VTX_SUCCESS   (0)
 int
 vtx_try_commit(vtx_t *tx)
 {
-	if (tx->parent_tx) {
-		// TODO: nested transactions
+	if (tx->parent_tx) // TODO: nested transactions
 		assert(false);
-	}
 
-	// TODO: What happens if a child transaction has not commited yet?
-	//  - can we detect it?
-	//   => we can check the reference count of the versions
-	//         - what if a child transaction uses other objects?
-	//  - do we wait for it? fail?
+	int err = VTS_FAIL;
+	vtxobj_t *txo;
+	list_for_each(&tx->obj_l, txo, tx_l) { // XXX: assumption: list is ordered
+		if (atomic_read(&txo->ver) > 1)
+			assert(false); // we need to wait for nested transactions
 
-	txobj_t *txo;
-	list_for_each(&tx->obj_l, txo, tx_l) {
-		if (ver_parent(txo->ver) == txo->mo->ver)
+		const ver_t *mver = mobj_verget(tx->mo);
+		if (mv == VER_FAILURE)
+			goto end;
+
+		if (ver_parent(txo->ver) == mver)
 			continue;
 
 		// try to merge...
-		// XXX: How the above property would effect versioned trees
+		// XXX: How the above property would affect versioned trees
 		//      (e.g., GC)?
-		ver_merge();
+		ver_t *merged_v;
+		merged_v = ver_merge(txo->ver, mver);
+		if (merged_v == VER_FAILURE)
+			goto end;
+
+		// this is private, so we don't need a lock or anything.
+		//  -> what happens if a nested transaction has a reference?
+		ver_put(txo->ver);
 	}
 
 	/* Note, that here we need to change the state atomically, since an
 	 * object might have changed under our nose, and we can't merge it now.
 	 * So, we take the locks in-order, and check versions. If we manage to
 	 * take all the locks, we update the state.*/
-	int err = 0;
+	err = VTS_SUCCESS;
 	list_for_each(&tx->obj_l, txo, tx_l) { // XXX: assumption: list is ordered
 		spin_lock(txo->mobj->lock);
 		if (ver_parent(txo->ver) != txo->mo->ver) {
-			err = -1;
+			err = VTS_FAIL;
 			break;
 		}
 	}
@@ -289,6 +429,8 @@ vtx_try_commit(vtx_t *tx)
 	/* release locks starting from txo and going backwards */
 	//TODO
 
+end:
+	/* TODO: cleanup if fail */
 	return err;
 }
 
@@ -303,9 +445,11 @@ vtx_end(vtx_t *tx, unsigned int retries)
 }
 
 
-/* TODO: add a SLAB */
+/* TODO: add a SLAB:
+ *  setting the reference count to 1
+ */
 ver_t *
-__ver_alloc(void)
+ver_alloc__(void)
 {
 	 ver_t *v = malloc(sizeof(ver_t));
 	 if (v == NULL) {
@@ -322,6 +466,9 @@ ver_free(vbfs_ver_t *v)
 	free(v);
 }
 
+/* create a mutable object, from a versioned object
+ *  this allocates a new root (i.e., ->parent == NULL) version that has a
+ *  refcount of 1 */
 static mobj_t *
 mobj_create(void *vobj)
 {
@@ -339,7 +486,7 @@ mobj_create(void *vobj)
 ver_t *
 ver_create(void *vobj)
 {
-	ver_t *ret = __ver_alloc();
+	ver_t *ret = ver_alloc__();
 	ret->parent = NULL;
 	ret->vobj = vobj;
 	return ret;
@@ -349,7 +496,7 @@ ver_t *
 ver_branch(ver_t *parent)
 {
 	/* allocate and initialize new version */
-	ver_t *v = __ver_alloc();
+	ver_t *v = ver_alloc__();
 	/* increase the reference count of the parent */
 	v->parent = ver_getref(parent);
 	/* TODO copy object */
