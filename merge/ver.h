@@ -1,6 +1,8 @@
 #ifndef VER_H__
 #define VER_H__
 
+#include <stdbool.h>
+
 #include "refcnt.h"
 #include "misc.h"
 

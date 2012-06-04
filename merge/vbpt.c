@@ -3,100 +3,14 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 #include <inttypes.h>
 #include <assert.h>
-
-#include "container_of.h"
 
 #include "misc.h"
 #include "ver.h"
 #include "refcnt.h"
-
-#define VBPT_NODE_SIZE 1024
-#define VBPT_LEAF_SIZE 1024
-#define VBPT_MAX_LEVEL 64
-
-
-enum vbpt_type {
-	VBPT_INVALID = 0x0,
-	VBPT_NODE    = 0x1, /* internal node */
-	VBPT_LEAF    = 0x2, /* leaf */
-};
-
-/**
- * metadata for each block. In non-volatile case it might be better to keep it
- * seperately than the objects (e.g., on a table indexed by block number). For
- * now we inline it.
- */
-struct vbpt_hdr {
-	ver_t           *ver;
-	refcnt_t        refcnt;
-	enum vbpt_type  type;
-};
-typedef struct vbpt_hdr vbpt_hdr_t;
-
-vbpt_hdr_t *
-vbpt_hdr_getref(vbpt_hdr_t *hdr)
-{
-	refcnt_inc(&hdr->refcnt);
-	return hdr;
-}
-
-vbpt_hdr_t *
-vbpt_hdr_putref(vbpt_hdr_t *hdr)
-{
-	refcnt_dec(&hdr->refcnt);
-	return hdr;
-}
-
-struct vbpt_kvp { /* key-address pair */
-	uint64_t key;
-	vbpt_hdr_t *val;
-};
-typedef struct vbpt_kvp vbpt_kvp_t;
-
-/**
- * @kvp: array of key-node pairs.
- *  kvp[i].val has the keys k such that kvp[i-1].key < k <= kvp[i].key
- *  (kvp[-1] == -1)
- */
-struct vbpt_node {
-	vbpt_hdr_t  n_hdr;
-	uint16_t    items_nr, items_total;
-	vbpt_kvp_t  kvp[];
-};
-typedef struct vbpt_node vbpt_node_t;
-
-struct vbpt_leaf {
-	struct vbpt_hdr l_hdr;
-	size_t len, total_len;
-	char data[];
-};
-typedef struct vbpt_leaf vbpt_leaf_t;
-
-
-
-/* root is nodes[0], leaf is nodes[height-1].kvp[slots[height-1]] */
-struct vbpt_path {
-	vbpt_node_t *nodes[VBPT_MAX_LEVEL];
-	uint16_t    slots[VBPT_MAX_LEVEL];
-	uint16_t    height;
-};
-typedef struct vbpt_path vbpt_path_t;
-
-static inline vbpt_node_t *
-hdr2node(vbpt_hdr_t *hdr)
-{
-	assert(hdr->type == VBPT_NODE);
-	return container_of(hdr, vbpt_node_t, n_hdr);
-}
-
-static inline vbpt_leaf_t *
-hdr2leaf(vbpt_hdr_t *hdr)
-{
-	assert(hdr->type == VBPT_LEAF);
-	return container_of(hdr, vbpt_leaf_t, l_hdr);
-}
+#include "vbpt.h"
 
 static vbpt_kvp_t *
 find_kvp(vbpt_node_t *node, uint64_t key)
@@ -108,6 +22,7 @@ find_kvp(vbpt_node_t *node, uint64_t key)
 	return kvp;
 }
 
+/* find slot for key in node */
 static uint16_t
 find_slot(vbpt_node_t *node, uint64_t key)
 {
@@ -123,12 +38,6 @@ find_key(vbpt_node_t *node, uint64_t key)
 {
 	vbpt_kvp_t *kvp = find_kvp(node, key);
 	return kvp->val;
-}
-
-
-static void
-insert_key(vbpt_node_t *node, uint64_t key, vbpt_hdr_t *val)
-{
 }
 
 /*
@@ -181,21 +90,78 @@ cow_node(vbpt_node_t *parent, uint16_t parent_slot)
 	vbpt_hdr_putref(&old->n_hdr);
 }
 
+static void
+insert_ptr(vbpt_node_t *node, int slot, uint64_t key, vbpt_hdr_t *val)
+{
+	assert(slot < node->items_total);
+
+	vbpt_kvp_t *kvp = node->kvp + slot;
+
+	if (slot > node->items_nr) {
+		assert(false);
+	} else if (slot < node->items_nr) {
+		// need to shift
+		memmove(kvp, kvp+1, node->items_nr - slot);
+	}
+
+	kvp->key = key;
+	kvp->val = val;
+	node->items_nr++;
+}
+
+static inline bool
+node_full(vbpt_node_t *node)
+{
+	return (node->items_nr == node->items_total);
+}
+
+/**
+ * split a node
+ *  invariant: parent node has free slots
+ */
+static void
+split_node(vbpt_tree_t *tree, vbpt_path_t *path)
+{
+	if (path->height == 1) {
+		// split root
+	}
+
+	ver_t *ver = vbpt_tree_ver(tree);
+	vbpt_node_t *node = path->nodes[path->height - 1];
+	assert(ver_eq(ver, node->n_hdr.ver));
+	vbpt_node_t *parent = path->nodes[path->height - 2];
+	assert(ver_eq(ver, parent->n_hdr.ver));
+	uint16_t parent_slot = path->slots[path->height - 2];
+
+	vbpt_node_t *new = vbpt_alloc_node(VBPT_NODE_SIZE, ver);
+	uint16_t mid = (node->items_nr + 1) / 2;
+	uint16_t new_items_nr = node->items_nr - mid;
+
+	memcpy(new->kvp, node->kvp + mid, new_items_nr*sizeof(vbpt_kvp_t));
+	new->items_nr = new_items_nr;
+
+	node->items_nr -= new_items_nr;
+	assert(node->items_nr == mid);
+
+	insert_ptr(parent, parent_slot + 1, new->kvp[0].key, &new->n_hdr);
+}
+
 /**
 * find a leaf to a tree.
 *  - @path contains the resulting path from the root
-*  - if @cow_ver is not NULL, then nodes on the path with different versions
-*    will be COWed
+*  - op: 0 if just reading, <0 if removing, >0 if inserting
 */
 static void
-find_leaf(vbpt_node_t *root, uint64_t key, vbpt_path_t *path, ver_t *cow_ver)
+vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
+            vbpt_path_t *path)
 {
-	assert(cow_ver == NULL || root->n_hdr.ver == cow_ver);
-	vbpt_node_t *node = root;
+	vbpt_node_t *node = tree->root;
+	ver_t *cow_ver = vbpt_tree_ver(tree);
 
+	/* check if cow is needed */
 	bool do_cow(ver_t *v) {
-		bool ret = (cow_ver != NULL) && !ver_eq(cow_ver, v);
-		assert(!v || ver_leq(v, cow_ver));
+		bool ret = (op != 0) && !ver_eq(cow_ver, v);
+		assert(ver_leq(v, cow_ver));
 		return ret;
 	}
 
@@ -203,12 +169,20 @@ find_leaf(vbpt_node_t *root, uint64_t key, vbpt_path_t *path, ver_t *cow_ver)
 	for (i=0; ; i++) {
 		assert(i < VBPT_MAX_LEVEL);
 		uint16_t slot = find_slot(node, key);
-		vbpt_hdr_t *hdr_next = node->kvp[slot].val;
 		path->nodes[i] = node;
 		path->slots[i] = slot;
+		path->height = i + 1;
+
+		if (op > 0 && node_full(node)) {
+			split_node(tree, path);
+		}
+
+
+		vbpt_hdr_t *hdr_next = node->kvp[slot].val;
 		if (hdr_next->type == VBPT_LEAF)
 			break;
 		vbpt_node_t *node_next;
+
 		if (do_cow(hdr_next->ver))
 			node_next = cow_node(node, slot);
 		else
@@ -217,13 +191,13 @@ find_leaf(vbpt_node_t *root, uint64_t key, vbpt_path_t *path, ver_t *cow_ver)
 		assert(cow_ver == NULL || node->n_hdr.ver == cow_ver);
 		node = node_next;
 	}
-	path->height = i + 1;
 }
 
 
-static void
-vbpt_insert(vbpt_node_t *root, uint64_t key, vbpt_leaf_t *data)
+void
+vbpt_insert(vbpt_node_t *root, uint64_t key, vbpt_leaf_t *data, ver_t *cow_ver)
 {
+	//vbpt_path_t path[VBPT_MAX_LEVEL];
 }
 
 

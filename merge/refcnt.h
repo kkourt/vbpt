@@ -1,6 +1,8 @@
 #ifndef REFCNT_H_
 #define REFCNT_H_
 
+#include <inttypes.h>
+#include "misc.h"
 
 struct refcnt {
 	uint32_t cnt;
@@ -8,7 +10,7 @@ struct refcnt {
 };
 typedef struct refcnt refcnt_t;
 
-static void
+static inline void
 refcnt_init(refcnt_t *rcnt, uint32_t cnt)
 {
 	spinlock_init(&rcnt->lock);
