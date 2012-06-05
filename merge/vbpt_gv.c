@@ -5,8 +5,10 @@
 #include <stdio.h>
 #include <graphviz/gvc.h>
 
-#include "vbpt.h"
 #include "darray.h"
+
+#include "vbpt.h"
+#include "vbpt_gv.h"
 
 static Agraph_t *gvGraph = NULL;
 
@@ -35,8 +37,8 @@ get_graph(void)
 	return gvGraph;
 }
 
-static void
-vbpt_reset(void)
+void
+vbpt_gv_reset(void)
 {
 	if (gvGraph == NULL)
 		return;
@@ -44,8 +46,8 @@ vbpt_reset(void)
 	gvGraph = NULL;
 }
 
-static void
-vbpt_gv_end(char *fname)
+void
+vbpt_gv_write(char *fname)
 {
 	Agraph_t *g = get_graph();
 
@@ -61,7 +63,7 @@ vbpt_gv_end(char *fname)
 
 	agwrite(g, fp);
 	fclose(fp);
-	vbpt_reset();
+	vbpt_gv_reset();
 }
 
 static void *
@@ -82,8 +84,8 @@ vbpt_add_leaf(vbpt_leaf_t *leaf)
 }
 
 /* recursively add a node to the graph */
-static void *
-vbpt_add_node(vbpt_node_t *node)
+void *
+vbpt_gv_add_node(vbpt_node_t *node)
 {
 	Agraph_t *g = get_graph();
 	Agnode_t *n;
@@ -99,6 +101,7 @@ vbpt_add_node(vbpt_node_t *node)
 
 	/* create label */
 	darray_char da_label;
+	darray_init(da_label);
 	darray_append_lit(da_label, "");
 	for (uint16_t i=0; i<node->items_nr; i++) {
 		uint64_t child_key = node->kvp[i].key;
@@ -114,15 +117,13 @@ vbpt_add_node(vbpt_node_t *node)
 	for (uint16_t i=0; i<node->items_nr; i++) {
 		vbpt_hdr_t *child_hdr = node->kvp[i].val;
 		// find parent
-		char parent_name[64];
-		snprintf("%s:k%d", sizeof(parent_name), node_name, i);
-		Agnode_t *parent = agfindnode(g, parent_name);
+		Agnode_t *parent = agfindnode(g, node_name);
 		assert(parent != NULL);
 		// find/create child
 		Agnode_t *child;
 		switch (child_hdr->type) {
 			case  VBPT_NODE:
-			child = vbpt_add_node(hdr2node(child_hdr));
+			child = vbpt_gv_add_node(hdr2node(child_hdr));
 			break;
 
 			case  VBPT_LEAF:
@@ -132,8 +133,23 @@ vbpt_add_node(vbpt_node_t *node)
 			default:
 			assert(false);
 		}
-		agedge(g, parent, child);
+		Agedge_t *e = agedge(g, parent, child);
+		char port_name[16];
+		snprintf(port_name, sizeof(port_name), "k%d", i);
+		do_agset(e, "tailport", port_name);
 	}
 
 	return n;
 }
+
+#if 0
+if (parent == NULL) {
+	printf("could not find: --\%s--\n", parent_name);
+	for (Agnode_t *n = agfstnode(g); ; n = agnxtnode(g, n) ) {
+		printf("n=%s\n", n->name);
+		if (n == aglstnode(g))
+			break;
+	}
+	exit(10);
+}
+#endif

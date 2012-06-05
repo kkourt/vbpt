@@ -13,7 +13,7 @@ struct ver {
 typedef struct ver ver_t;
 
 /* get a reference of ver -- i.e., increase reference count */
-ver_t *
+static inline ver_t *
 ver_getref(ver_t *ver)
 {
 	refcnt_inc(&ver->refcnt);
@@ -22,16 +22,17 @@ ver_getref(ver_t *ver)
 
 
 /* create a version from a versioned object */
-ver_t *
+static inline ver_t *
 ver_create(void)
 {
 	ver_t *ret = xmalloc(sizeof(ver_t));
 	ret->parent = NULL;
+	refcnt_init(&ret->refcnt, 1);
 	return ret;
 }
 
 /* branch (i.e., fork) a version */
-ver_t *
+static inline ver_t *
 ver_branch(ver_t *parent)
 {
 	/* allocate and initialize new version */
