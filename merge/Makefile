@@ -16,5 +16,8 @@ vbpt-test: vbpt.c vbpt_gv.c $(hdrs)
 vbpt_gv.o: vbpt_gv.c $(hdrs)
 	$(CC) $(CFLAGS) $< -c -o $@
 
+%.pdf: %.dot
+	 dot -Tpdf $< -o $@
+
 clean: 
 	rm *.o

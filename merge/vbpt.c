@@ -134,9 +134,10 @@ static vbpt_hdr_t *
 insert_ptr(vbpt_node_t *node, int slot, uint64_t key, vbpt_hdr_t *val)
 {
 	assert(slot < node->items_total);
+	assert(slot <= node->items_nr);
 
 	vbpt_kvp_t *kvp = node->kvp + slot;
-	if (kvp->key == key) {
+	if (slot < node->items_nr && kvp->key == key) {
 		vbpt_hdr_t *old = kvp->val;
 		kvp->val = vbpt_hdr_getref(val);
 		return old;
@@ -146,7 +147,7 @@ insert_ptr(vbpt_node_t *node, int slot, uint64_t key, vbpt_hdr_t *val)
 		assert(false); // note that node->items_nr == slot is OK
 	} else if (slot < node->items_nr) {
 		// need to shift
-		memmove(kvp, kvp+1, node->items_nr - slot);
+		memmove(kvp+1, kvp, (node->items_nr - slot)*sizeof(vbpt_kvp_t));
 	}
 
 	kvp->key = key;
@@ -199,13 +200,19 @@ split_node(vbpt_tree_t *tree, vbpt_path_t *path)
 {
 	ver_t *ver = vbpt_tree_ver(tree);
 
-	vbpt_node_t *node = path->nodes[path->height - 1];
-	assert(ver_eq(ver, node->n_hdr.ver));
-	uint16_t node_slot = path->slots[path->height -1];
+	#if 0
+	printf("***** BEFORE SPLIT\n");
+	vbpt_path_print(path);
+	vbpt_node_print(tree->root, 1, false);
+	#endif
 
 	if (path->height == 1) {
 		add_new_root(tree, path);
 	}
+
+	vbpt_node_t *node = path->nodes[path->height - 1];
+	assert(ver_eq(ver, node->n_hdr.ver));
+	uint16_t node_slot = path->slots[path->height -1];
 
 	vbpt_node_t *parent = path->nodes[path->height - 2];
 	assert(ver_eq(ver, parent->n_hdr.ver));
@@ -213,9 +220,9 @@ split_node(vbpt_tree_t *tree, vbpt_path_t *path)
 
 	vbpt_node_t *new = vbpt_alloc_node(VBPT_NODE_SIZE, ver);
 	uint16_t mid = (node->items_nr + 1) / 2;
-	uint16_t new_items_nr = node->items_nr - mid;
 
 	/* no need to update references, just memcpy */
+	uint16_t new_items_nr = node->items_nr - mid;
 	memcpy(new->kvp, node->kvp + mid, new_items_nr*sizeof(vbpt_kvp_t));
 	new->items_nr = new_items_nr;
 
@@ -225,13 +232,27 @@ split_node(vbpt_tree_t *tree, vbpt_path_t *path)
 
 	vbpt_hdr_t *old;
 	old = insert_ptr(parent, parent_slot + 1, new->kvp[new->items_nr - 1].key, &new->n_hdr);
-	assert(old == NULL);
+	if (old != NULL) {
+		fprintf(stderr, "got an old pointer: %p\n", old);
+		if (old->type == VBPT_NODE)
+			vbpt_node_print(hdr2node(old), 0, false);
+		else
+			vbpt_leaf_print(hdr2leaf(old), 0);
 
-	if (node_slot > mid) {
+		assert(false);
+	}
+
+	if (node_slot >= mid) {
 		path->nodes[path->height - 1] = new;             // node
 		path->slots[path->height - 1] = node_slot - mid; // node slot
 		path->slots[path->height - 2] = parent_slot + 1; // parent slot
 	}
+
+	#if 0
+	printf("***** AFTER SPLIT\n");
+	vbpt_path_print(path);
+	vbpt_node_print(tree->root, 1, false);
+	#endif
 }
 
 static bool
@@ -259,32 +280,56 @@ vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
 		return ret;
 	}
 
-	for (unsigned i=0; ; i++) {
-		assert(i < VBPT_MAX_LEVEL);
+	unsigned lvl = path->height = 0;
+	while (true) {
+		assert(lvl < VBPT_MAX_LEVEL);
+
 		uint16_t slot = find_slot(node, key);
+		path->nodes[lvl] = node;
+		path->slots[lvl] = slot;
+		path->height = lvl + 1;
 
-		path->nodes[i] = node;
-		path->slots[i] = slot;
-		path->height = i + 1;
-
-		// the node should be placed after the end of the current
-		if (slot >= node->items_nr) {
-			if (op > 0 && points_to_node(node, slot-1)) {
-				node->kvp[slot-1].key = key;
-				path->slots[i] = slot = slot - 1;
-			}
-		}
 
 		if (op > 0 && node_full(node)) {
 			split_node(tree, path);
+			lvl = path->height - 1;
+
+			assert(lvl > 0);
+			// the code bellow tries to update the parent key
+			// accordingly when a split happens.
+			slot = path->slots[lvl];
+			node = path->nodes[lvl];
+			assert(slot <= node->items_nr);
+			if (slot == node->items_nr) {
+				vbpt_node_t *parent_node = path->nodes[lvl-1];
+				uint16_t parent_slot = path->slots[lvl-1];
+				if (parent_node->kvp[parent_slot].key <= key) {
+					parent_node->kvp[parent_slot].key = key;
+				}
+			}
 		}
 
-		if (slot >= node->items_nr)
-			break;
+		assert(slot <= node->items_nr);
+		// the slot is  after the last item.
+		// If this is a write and we aren't to the last level of nodes,
+		// update the rightmost element to be the key we will be
+		// inserting.
+		// If this is a read or it points to a leaf, just return -- the
+		// key does not exist
+		if (slot == node->items_nr) {
+			if (op > 0 && points_to_node(node, slot-1) ) {
+				uint16_t last_idx = node->items_nr - 1;
+				assert(node->kvp[last_idx].key < key);
+				node->kvp[last_idx].key = key;
+				slot = path->slots[lvl] = slot - 1;
+			} else {
+				break;
+			}
+		}
 
 		vbpt_hdr_t *hdr_next = node->kvp[slot].val;
 		if (hdr_next->type == VBPT_LEAF) {
-			assert(i + 1 == tree->height);
+			assert(lvl + 1 == tree->height);
 			break;
 		}
 
@@ -297,6 +342,8 @@ vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
 
 		assert(cow_ver == NULL || node->n_hdr.ver == cow_ver);
 		node = node_next;
+
+		lvl++;
 	}
 }
 
@@ -337,7 +384,7 @@ vbpt_insert(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t *data, vbpt_leaf_t **ol
 		vbpt_hdr_putref(old);
 }
 
-static void
+void
 vbpt_leaf_print(vbpt_leaf_t *leaf, int indent)
 {
 	printf("%*s" "[leaf=%p ->len=%lu ->total_len=%lu]\n",
@@ -345,45 +392,112 @@ vbpt_leaf_print(vbpt_leaf_t *leaf, int indent)
 		leaf, leaf->len, leaf->total_len);
 }
 
+static void
+vbpt_node_verify(vbpt_node_t *node)
+{
+	vbpt_kvp_t *kvp0 = node->kvp;
+	for (unsigned i=1; i < node->items_nr; i++) {
+		vbpt_kvp_t *kvp = node->kvp + i;
+		if (kvp0->val->type != kvp->val->type) {
+			fprintf(stderr,
+			        "child %u has type %u and child 0 type %u\n",
+			        i, kvp->val->type, kvp0->val->type);
+			assert(false);
+		}
+	}
+
+	if (kvp0->val->type == VBPT_LEAF)
+		return;
+
+	for (unsigned i=0; i < node->items_nr; i++) {
+		vbpt_kvp_t *kvp = node->kvp + i;
+		uint64_t key = kvp->key;
+		vbpt_node_t *c = hdr2node(kvp->val);
+		uint64_t high_key = c->kvp[c->items_nr - 1].key;
+		if (key != high_key) {
+			fprintf(stderr,
+				"child %u of node %p has high_key=%lu"
+				" and node has key=%lu\n",
+				  i, node, high_key, key);
+			assert(false);
+		}
+	}
+}
 
 void
-vbpt_node_print(vbpt_node_t *node, int indent)
+vbpt_node_print(vbpt_node_t *node, int indent, bool verify)
 {
 	printf("\n%*s" "[node=%p ->items_nr=%u ->items_total=%u]\n",
 	        indent, " ",
 		node, node->items_nr, node->items_total);
 	for (unsigned i=0; i < node->items_nr; i++) {
 		vbpt_kvp_t *kvp = node->kvp + i;
-		printf("%*s" "key=%lu ", indent, " ", kvp->key);
+		printf("%*s" "key=%5lu ", indent, " ", kvp->key);
 		if (kvp->val->type == VBPT_NODE)
-			vbpt_node_print(hdr2node(kvp->val), indent+4);
+			vbpt_node_print(hdr2node(kvp->val), indent+4, verify);
 		else
 			vbpt_leaf_print(hdr2leaf(kvp->val), indent+4);
 	}
+
+	if (verify)
+		vbpt_node_verify(node);
+}
+
+void
+vbpt_path_print(vbpt_path_t *path)
+{
+	printf("PATH:%p", path);
+	for (uint16_t i=0; i<path->height; i++) {
+		printf(" [node: %p slot:%u]", path->nodes[i], path->slots[i]);
+	}
+	printf("\n");
 }
 
 
 #if defined(VBPT_TEST)
 #include "vbpt_gv.h"
-int main(int argc, const char *argv[])
+#include <stdlib.h>
+
+static void
+do_insert_test(int rand_seed)
 {
+	if (rand_seed)
+		srand(rand_seed);
+
 	ver_t *v = ver_create();
 	vbpt_tree_t *t = vbpt_alloc_tree(v);
 	//vbpt_leaf_t *l1 = vbpt_alloc_leaf(VBPT_LEAF_SIZE, v);
 	//vbpt_leaf_t *l2 = vbpt_alloc_leaf(VBPT_LEAF_SIZE, v);
 	//vbpt_insert(t, 42, l1, NULL);
 	//vbpt_insert(t, 100, l2, NULL);
-	for (uint64_t i=0; i < 64; i++) {
+	for (uint64_t i=0; i < 128; i++) {
+		uint64_t k = (rand_seed) ? rand() % 1024 : i;
 		vbpt_leaf_t *l = vbpt_alloc_leaf(VBPT_LEAF_SIZE, v);
-		printf("insert=%lu\n", i);
-		vbpt_insert(t, i, l, NULL);
-		vbpt_node_print(t->root, 0);
+		printf("INSERTING %lu key=%lu\n", i, k);
+		vbpt_insert(t, k, l, NULL);
+		printf("AFTER insert %lu key=%lu", i, k);
+		vbpt_node_print(t->root, 0, true);
 	}
 	printf("root->items_total=%d\n", t->root->items_total);
 	printf("root->items_nr=%d\n", t->root->items_nr);
 
 	vbpt_gv_add_node(t->root);
 	vbpt_gv_write("test.dot");
+}
+
+int main(int argc, const char *argv[])
+{
+	do_insert_test(157);
+	do_insert_test(158);
+
+	#if 1
+	for (unsigned i=0; i<=666; i++) {
+		fprintf(stderr, "doing test i=%u\n", i);
+		printf("DOING test i=%u\n", i);
+		do_insert_test(i);
+	}
+	#endif
+
 	return 0;
 }
 #endif

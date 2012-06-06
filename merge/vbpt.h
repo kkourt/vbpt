@@ -1,7 +1,7 @@
 #ifndef VBPT_H_
 #define VBPT_H_
-#define VBPT_NODE_SIZE 1024
-#define VBPT_LEAF_SIZE 1024
+#define VBPT_NODE_SIZE 128
+#define VBPT_LEAF_SIZE 128
 #define VBPT_MAX_LEVEL 64
 
 #include <inttypes.h>
@@ -133,7 +133,8 @@ hdr2leaf(vbpt_hdr_t *hdr)
 	return container_of(hdr, vbpt_leaf_t, l_hdr);
 }
 
-void
-vbpt_node_print(vbpt_node_t *node, int indent);
+void vbpt_node_print(vbpt_node_t *node, int indent, bool verify);
+void vbpt_leaf_print(vbpt_leaf_t *leaf, int indent);
+void vbpt_path_print(vbpt_path_t *path);
 
 #endif /* VBPT_H_ */

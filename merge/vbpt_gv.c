@@ -137,6 +137,7 @@ vbpt_gv_add_node(vbpt_node_t *node)
 		char port_name[16];
 		snprintf(port_name, sizeof(port_name), "k%d", i);
 		do_agset(e, "tailport", port_name);
+		do_agset(e, "headport", "n");
 	}
 
 	return n;
