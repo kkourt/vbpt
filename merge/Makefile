@@ -1,11 +1,11 @@
 .PHONY: all clean
 
 CC=gcc
-CFLAGS=-Wall -O2  -g  -D_GNU_SOURCE -I. -std=c99
+CFLAGS=-Wall -O2  -g  -D_GNU_SOURCE -I. -std=c99 #-fprofile-arcs -ftest-coverage
 LIBS=-lpthread
 hdrs=$(wildcard *.h)
 
-all:  vbpt.o vbpt_gv.o vbpt-test
+all:  vbpt-test
 
 vbpt.o: vbpt.c $(hdrs)
 	$(CC) $(CFLAGS) $< -c -o $@
@@ -20,4 +20,4 @@ vbpt_gv.o: vbpt_gv.c $(hdrs)
 	 dot -Tpdf $< -o $@
 
 clean: 
-	rm *.o
+	rm -f *.o vbpt-test *.gcno *.gcov *.gcda
