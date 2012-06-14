@@ -27,6 +27,19 @@ struct vbpt_hdr {
 };
 typedef struct vbpt_hdr vbpt_hdr_t;
 
+static inline bool
+vbpt_isleaf(vbpt_hdr_t *hdr)
+{
+	return  hdr->type == VBPT_LEAF;
+}
+
+static inline bool
+vbpt_isnode(vbpt_hdr_t *hdr)
+{
+	return hdr->type == VBPT_NODE;
+}
+
+
 static inline vbpt_hdr_t *
 vbpt_hdr_getref(vbpt_hdr_t *hdr)
 {
@@ -45,6 +58,19 @@ struct vbpt_kvp { /* key-address pair */
 	vbpt_hdr_t *val;
 };
 typedef struct vbpt_kvp vbpt_kvp_t;
+
+static inline void  *
+kvpmove(vbpt_kvp_t *dst, vbpt_kvp_t *src, uint16_t items)
+{
+	return memmove(dst, src, items*sizeof(vbpt_kvp_t));
+}
+
+static inline void *
+kvpcpy(vbpt_kvp_t *dst, vbpt_kvp_t *src, uint16_t items)
+{
+	return memcpy(dst, src, items*sizeof(vbpt_kvp_t));
+}
+
 
 /**
  * @kvp: array of key-node pairs.
@@ -118,6 +144,16 @@ struct vbpt_path {
 	uint16_t    height;
 };
 typedef struct vbpt_path vbpt_path_t;
+
+static inline uint64_t
+vpbt_path_key(vbpt_path_t *path, uint16_t lvl)
+{
+	assert(lvl < path->height);
+	uint16_t slot = path->slots[lvl];
+	vbpt_node_t *n = path->nodes[lvl];
+	return n->kvp[slot].key;
+}
+
 
 static inline vbpt_node_t *
 hdr2node(vbpt_hdr_t *hdr)
