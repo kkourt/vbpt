@@ -22,55 +22,16 @@ enum vbpt_type {
  */
 struct vbpt_hdr {
 	ver_t           *ver;
-	refcnt_t        refcnt;
+	refcnt_t        h_refcnt;
 	enum vbpt_type  type;
 };
 typedef struct vbpt_hdr vbpt_hdr_t;
-
-static inline bool
-vbpt_isleaf(vbpt_hdr_t *hdr)
-{
-	return  hdr->type == VBPT_LEAF;
-}
-
-static inline bool
-vbpt_isnode(vbpt_hdr_t *hdr)
-{
-	return hdr->type == VBPT_NODE;
-}
-
-
-static inline vbpt_hdr_t *
-vbpt_hdr_getref(vbpt_hdr_t *hdr)
-{
-	refcnt_inc(&hdr->refcnt);
-	return hdr;
-}
-
-static inline void
-vbpt_hdr_putref(vbpt_hdr_t *hdr)
-{
-	refcnt_dec(&hdr->refcnt);
-}
 
 struct vbpt_kvp { /* key-address pair */
 	uint64_t key;
 	vbpt_hdr_t *val;
 };
 typedef struct vbpt_kvp vbpt_kvp_t;
-
-static inline void  *
-kvpmove(vbpt_kvp_t *dst, vbpt_kvp_t *src, uint16_t items)
-{
-	return memmove(dst, src, items*sizeof(vbpt_kvp_t));
-}
-
-static inline void *
-kvpcpy(vbpt_kvp_t *dst, vbpt_kvp_t *src, uint16_t items)
-{
-	return memcpy(dst, src, items*sizeof(vbpt_kvp_t));
-}
-
 
 /**
  * @kvp: array of key-node pairs.
@@ -88,19 +49,6 @@ struct vbpt_node {
 };
 typedef struct vbpt_node vbpt_node_t;
 
-static inline vbpt_node_t *
-vbpt_node_getref(vbpt_node_t *node)
-{
-	refcnt_inc(&node->n_hdr.refcnt);
-	return node;
-}
-
-static inline void
-vbpt_node_putref(vbpt_node_t *node)
-{
-	refcnt_dec(&node->n_hdr.refcnt);
-}
-
 struct vbpt_leaf {
 	struct vbpt_hdr l_hdr;
 	size_t len, total_len;
@@ -108,32 +56,12 @@ struct vbpt_leaf {
 };
 typedef struct vbpt_leaf vbpt_leaf_t;
 
-static inline vbpt_leaf_t *
-vbpt_leaf_getref(vbpt_leaf_t *leaf)
-{
-	refcnt_inc(&leaf->l_hdr.refcnt);
-	return leaf;
-}
-
-static inline void
-vbpt_leaf_putref(vbpt_leaf_t *leaf)
-{
-	refcnt_dec(&leaf->l_hdr.refcnt);
-}
-
 struct vbpt_tree {
 	vbpt_node_t *root; // holds a reference (if not NULL)
 	ver_t *ver;        // holds a reference
 	uint16_t height;
 };
 typedef struct vbpt_tree vbpt_tree_t;
-
-static inline ver_t *
-vbpt_tree_ver(vbpt_tree_t *tree)
-{
-	return tree->ver;
-}
-
 
 /* root is nodes[0], leaf is nodes[height-1].kvp[slots[height-1]]
  * Path does not hold references of nodes
@@ -145,15 +73,18 @@ struct vbpt_path {
 };
 typedef struct vbpt_path vbpt_path_t;
 
-static inline uint64_t
-vpbt_path_key(vbpt_path_t *path, uint16_t lvl)
-{
-	assert(lvl < path->height);
-	uint16_t slot = path->slots[lvl];
-	vbpt_node_t *n = path->nodes[lvl];
-	return n->kvp[slot].key;
-}
 
+/* print functions */
+void vbpt_tree_print(vbpt_tree_t *tree, bool verify);
+void vbpt_node_print(vbpt_node_t *node, int indent, bool verify);
+void vbpt_leaf_print(vbpt_leaf_t *leaf, int indent);
+void vbpt_path_print(vbpt_path_t *path);
+
+static inline vbpt_hdr_t *
+refcnt2hdr(refcnt_t *rcnt)
+{
+	return container_of(rcnt, vbpt_hdr_t, h_refcnt);
+}
 
 static inline vbpt_node_t *
 hdr2node(vbpt_hdr_t *hdr)
@@ -169,8 +100,110 @@ hdr2leaf(vbpt_hdr_t *hdr)
 	return container_of(hdr, vbpt_leaf_t, l_hdr);
 }
 
-void vbpt_node_print(vbpt_node_t *node, int indent, bool verify);
-void vbpt_leaf_print(vbpt_leaf_t *leaf, int indent);
-void vbpt_path_print(vbpt_path_t *path);
+
+static inline bool
+vbpt_isleaf(vbpt_hdr_t *hdr)
+{
+	return  hdr->type == VBPT_LEAF;
+}
+
+static inline bool
+vbpt_isnode(vbpt_hdr_t *hdr)
+{
+	return hdr->type == VBPT_NODE;
+}
+
+static inline vbpt_hdr_t *
+vbpt_hdr_getref(vbpt_hdr_t *hdr)
+{
+	refcnt_inc(&hdr->h_refcnt);
+	return hdr;
+}
+
+void vbpt_node_dealloc(vbpt_node_t *node);
+void vbpt_leaf_dealloc(vbpt_leaf_t *leaf);
+
+static inline void
+vbpt_hdr_release(refcnt_t *h_refcnt)
+{
+	vbpt_hdr_t *hdr = refcnt2hdr(h_refcnt);
+	switch (hdr->type) {
+		case VBPT_NODE: {
+			vbpt_node_t *node = hdr2node(hdr);
+			vbpt_node_dealloc(node);
+		} break;
+
+		case VBPT_LEAF: {
+			vbpt_leaf_t *leaf = hdr2leaf(hdr);
+			vbpt_leaf_dealloc(leaf);
+		} break;
+
+		default:
+		assert(false);
+	}
+}
+
+static inline void
+vbpt_hdr_putref(vbpt_hdr_t *hdr)
+{
+	refcnt_dec(&hdr->h_refcnt, vbpt_hdr_release);
+}
+
+static inline void  *
+kvpmove(vbpt_kvp_t *dst, vbpt_kvp_t *src, uint16_t items)
+{
+	return memmove(dst, src, items*sizeof(vbpt_kvp_t));
+}
+
+static inline void *
+kvpcpy(vbpt_kvp_t *dst, vbpt_kvp_t *src, uint16_t items)
+{
+	return memcpy(dst, src, items*sizeof(vbpt_kvp_t));
+}
+
+
+
+static inline vbpt_node_t *
+vbpt_node_getref(vbpt_node_t *node)
+{
+	refcnt_inc(&node->n_hdr.h_refcnt);
+	return node;
+}
+
+static inline void
+vbpt_node_putref(vbpt_node_t *node)
+{
+	vbpt_hdr_putref(&node->n_hdr);
+}
+
+static inline vbpt_leaf_t *
+vbpt_leaf_getref(vbpt_leaf_t *leaf)
+{
+	refcnt_inc(&leaf->l_hdr.h_refcnt);
+	return leaf;
+}
+
+static inline void
+vbpt_leaf_putref(vbpt_leaf_t *leaf)
+{
+	vbpt_hdr_putref(&leaf->l_hdr);
+}
+
+static inline ver_t *
+vbpt_tree_ver(vbpt_tree_t *tree)
+{
+	return tree->ver;
+}
+
+
+static inline uint64_t
+vpbt_path_key(vbpt_path_t *path, uint16_t lvl)
+{
+	assert(lvl < path->height);
+	uint16_t slot = path->slots[lvl];
+	vbpt_node_t *n = path->nodes[lvl];
+	return n->kvp[slot].key;
+}
+
 
 #endif /* VBPT_H_ */

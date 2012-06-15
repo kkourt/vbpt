@@ -33,17 +33,27 @@ node_imba(vbpt_node_t  *node)
 	return (node->items_nr <= imba_limit(node));
 }
 
+static char *
+vbpt_hdr_str(vbpt_hdr_t *hdr)
+{
+	static char buff[128];
+	snprintf(buff, sizeof(buff), " (ver:%p cnt:%u) ", hdr->ver, hdr->h_refcnt.cnt);
+	return buff;
+}
+
 void
 vbpt_leaf_print(vbpt_leaf_t *leaf, int indent)
 {
-	printf("%*s" "[leaf=%p ->len=%lu ->total_len=%lu]\n",
+	printf("%*s" "[leaf=%p ->len=%lu ->total_len=%lu] %s\n",
 	        indent, " ",
-		leaf, leaf->len, leaf->total_len);
+		leaf, leaf->len, leaf->total_len, vbpt_hdr_str(&leaf->l_hdr));
 }
 
 static void
 vbpt_node_verify(vbpt_node_t *node)
 {
+	assert(refcnt_(&node->n_hdr.h_refcnt) > 0);
+	assert(node->items_nr > 0);
 	vbpt_kvp_t *kvp0 = node->kvp;
 	for (unsigned i=1; i < node->items_nr; i++) {
 		vbpt_kvp_t *kvp = node->kvp + i;
@@ -73,12 +83,14 @@ vbpt_node_verify(vbpt_node_t *node)
 	}
 }
 
+
 void
 vbpt_node_print(vbpt_node_t *node, int indent, bool verify)
 {
-	printf("\n%*s" "[node=%p ->items_nr=%u ->items_total=%u imba_limit=%u]\n",
-	        indent, " ",
-		node, node->items_nr, node->items_total, imba_limit(node));
+	printf("\n%*s" "[node=%p ->items_nr=%u ->items_total=%u imba_limit=%u] %s\n",
+	        indent, " ", node,
+		node->items_nr, node->items_total, imba_limit(node),
+		vbpt_hdr_str(&node->n_hdr));
 	for (unsigned i=0; i < node->items_nr; i++) {
 		vbpt_kvp_t *kvp = node->kvp + i;
 		printf("%*s" "key=%5lu ", indent, " ", kvp->key);
@@ -185,7 +197,7 @@ static void
 vbpt_hdr_init(vbpt_hdr_t *hdr, ver_t *ver, enum vbpt_type type)
 {
 	hdr->ver = ver_getref(ver);
-	refcnt_init(&hdr->refcnt, 1);
+	refcnt_init(&hdr->h_refcnt, 1);
 	hdr->type = type;
 }
 
@@ -194,7 +206,7 @@ vbpt_hdr_init(vbpt_hdr_t *hdr, ver_t *ver, enum vbpt_type type)
  *  Version's refcount will be increased
  */
 vbpt_node_t *
-vbpt_alloc_node(size_t node_size, ver_t *ver)
+vbpt_node_alloc(size_t node_size, ver_t *ver)
 {
 	assert(node_size > sizeof(vbpt_node_t));
 	vbpt_node_t *ret = xmalloc(node_size);
@@ -204,12 +216,29 @@ vbpt_alloc_node(size_t node_size, ver_t *ver)
 	return ret;
 }
 
-/*
+/**
+ * free a node
+ *  version's refcount will be decreased
+ *  children's refcount will be decrased
+ */
+void
+vbpt_node_dealloc(vbpt_node_t *node)
+{
+	vbpt_kvp_t *kvp = node->kvp;
+	for (uint16_t i=0; i<node->items_nr; i++) {
+		vbpt_hdr_putref(kvp[i].val);
+	}
+	node->items_nr = 0;
+	ver_putref(node->n_hdr.ver);
+	free(node);
+}
+
+/**
  * allocate a new leaf
  *  Version's refcount will be increased
  */
 vbpt_leaf_t *
-vbpt_alloc_leaf(size_t leaf_size, ver_t *ver)
+vbpt_leaf_alloc(size_t leaf_size, ver_t *ver)
 {
 	assert(leaf_size > sizeof(vbpt_leaf_t));
 	vbpt_leaf_t *ret = xmalloc(leaf_size);
@@ -218,16 +247,41 @@ vbpt_alloc_leaf(size_t leaf_size, ver_t *ver)
 	ret->total_len = (leaf_size - sizeof(vbpt_leaf_t));
 	return ret;
 }
+/**
+ * free a leaf
+ *  vresion's refcount will be decreased
+ */
+void
+vbpt_leaf_dealloc(vbpt_leaf_t *leaf)
+{
+	ver_putref(leaf->l_hdr.ver);
+	free(leaf);
+}
 
-/* allocate (and initialize) a new tree */
+/**
+ * allocate (and initialize) a new tree.
+ *  Version refcnt is not increased
+ */
 vbpt_tree_t *
-vbpt_alloc_tree(ver_t *ver)
+vbpt_tree_alloc(ver_t *ver)
 {
 	vbpt_tree_t *ret = xmalloc(sizeof(vbpt_tree_t));
 	ret->ver = ver;
 	ret->root = NULL;
 	ret->height = 0;
 	return ret;
+}
+/**
+ * deallocate a tree descriptor
+ *  decrease version reference count
+ */
+void
+vbpt_tree_dealloc(vbpt_tree_t *tree)
+{
+	ver_putref(tree->ver);
+	if (tree->root != NULL)
+		vbpt_node_putref(tree->root);
+	free(tree);
 }
 
 /**
@@ -243,7 +297,7 @@ cow_node(vbpt_node_t *parent, uint16_t parent_slot)
 {
 	assert(parent_slot < parent->items_nr);
 	vbpt_node_t *old = hdr2node(parent->kvp[parent_slot].val);
-	vbpt_node_t *new = vbpt_alloc_node(VBPT_NODE_SIZE, parent->n_hdr.ver);
+	vbpt_node_t *new = vbpt_node_alloc(VBPT_NODE_SIZE, parent->n_hdr.ver);
 	for (unsigned i=0; i<old->items_nr; i++) {
 		new->kvp[i].key = old->kvp[i].key;
 		new->kvp[i].val = vbpt_hdr_getref(old->kvp[i].val);
@@ -254,10 +308,39 @@ cow_node(vbpt_node_t *parent, uint16_t parent_slot)
 }
 
 /**
+ * get left sibling of @node if it exists, or NULL
+ */
+static vbpt_node_t *
+get_left_sibling(vbpt_node_t *node, vbpt_path_t *path)
+{
+	vbpt_node_t *ret = NULL;
+	vbpt_node_t *pnode = path->nodes[path->height-2];
+	uint16_t pslot     = path->slots[path->height-2];
+	assert(node == path->nodes[path->height-1]);
+	assert(node == hdr2node(pnode->kvp[pslot].val));
+	if (pslot > 0)
+		ret = hdr2node(pnode->kvp[pslot-1].val);
+	return ret;
+}
+
+static vbpt_node_t *
+get_right_sibling(vbpt_node_t *node, vbpt_path_t *path)
+{
+	vbpt_node_t *ret = NULL;
+	vbpt_node_t *pnode = path->nodes[path->height-2];
+	uint16_t pslot     = path->slots[path->height-2];
+	assert(node == path->nodes[path->height-1]);
+	assert(node == hdr2node(pnode->kvp[pslot].val));
+	if (pslot < pnode->items_nr - 1)
+		ret = hdr2node(pnode->kvp[pslot+1].val);
+	return ret;
+}
+
+/**
  * insert a  pointer to a node
  *  input invariance: enough space exists
  *  this function might end  up shifting keys
- *  val's reference count will be increased
+ *  val's reference count will not be increased
  *
  * If the slot is already occupied with the same key, replace slot and return
  * old value
@@ -271,7 +354,7 @@ insert_ptr(vbpt_node_t *node, int slot, uint64_t key, vbpt_hdr_t *val)
 	vbpt_kvp_t *kvp = node->kvp + slot;
 	if (slot < node->items_nr && kvp->key == key) {
 		vbpt_hdr_t *old = kvp->val;
-		kvp->val = vbpt_hdr_getref(val);
+		kvp->val = val;
 		return old;
 	}
 
@@ -283,7 +366,7 @@ insert_ptr(vbpt_node_t *node, int slot, uint64_t key, vbpt_hdr_t *val)
 	}
 
 	kvp->key = key;
-	kvp->val = vbpt_hdr_getref(val);
+	kvp->val = val;
 	node->items_nr++;
 	return NULL;
 }
@@ -325,6 +408,9 @@ update_highkey(vbpt_node_t *node, uint16_t parent_slot,
 /**
  * delete the @node's pointer at slot @slot.
  * The node is included in @path at level @lvl
+ * delete_ptr() won't decrease the reference of the pointed node
+ * delete_ptr() will decrease the reference of the root node, if this was the
+ * last element on the root.
  */
 static vbpt_hdr_t *
 delete_ptr(vbpt_tree_t *tree, vbpt_node_t *node, uint16_t slot,
@@ -354,6 +440,7 @@ delete_ptr(vbpt_tree_t *tree, vbpt_node_t *node, uint16_t slot,
 		update_highkey(node, path->slots[lvl-1], path, lvl-1);
 	} else if (node->items_nr == 0 && node == tree->root) {
 		// no more elements left in root
+		vbpt_node_putref(tree->root);
 		tree->root = NULL;
 		tree->height = 0;
 	} else if (node->items_nr == 0) {
@@ -382,7 +469,7 @@ move_items_from_left(vbpt_tree_t *tree,
 	//   @node is @path's last node
 	assert(path->nodes[path->height-1] == node);
 	//   @left is left of @node
-	assert(pnode->kvp[pnode_slot -1].val == &left->n_hdr);
+	assert(get_left_sibling(node, path) == left);
 	//   no need to COW
 	assert(node->n_hdr.ver == left->n_hdr.ver);
 	//   there is enough space in node
@@ -397,7 +484,10 @@ move_items_from_left(vbpt_tree_t *tree,
 	node->items_nr += mv_items;
 
 	if (left->items_nr == 0) {
-		delete_ptr(tree, pnode, pnode_slot -1, path, path->height - 2);
+		vbpt_hdr_t *d;
+		d = delete_ptr(tree, pnode, pnode_slot -1, path, path->height - 2);
+		assert(get_left_sibling(node, path) != left);
+		assert(d == &left->n_hdr);
 		vbpt_node_putref(left);
 	} else {
 		update_highkey(left, pnode_slot -1, path, path->height -2);
@@ -437,7 +527,9 @@ move_items_from_right(vbpt_tree_t *tree,
 	if (right->items_nr > 0) {
 		kvpmove(right->kvp, right->kvp + mv_items, mv_items);
 	} else {
-		delete_ptr(tree, pnode, pnode_slot +1, path, path->height - 2);
+		vbpt_hdr_t  *d;
+		d = delete_ptr(tree, pnode, pnode_slot +1, path, path->height - 2);
+		assert(d == &right->n_hdr);
 		vbpt_node_putref(right);
 	}
 
@@ -483,7 +575,10 @@ move_items_left(vbpt_tree_t *tree,
 		kvpmove(node->kvp, node->kvp + mv_items, node_items);
 		node->items_nr = node_items;
 	} else {                 // node is now empty
-		delete_ptr(tree, pnode, pnode_slot, path, path->height - 2);
+		vbpt_hdr_t *d;
+		node->items_nr = 0;
+		d = delete_ptr(tree, pnode, pnode_slot, path, path->height - 2);
+		assert(d == &node->n_hdr);
 		vbpt_node_putref(node);
 	}
 	// update @path
@@ -520,7 +615,7 @@ move_items_right(vbpt_tree_t *tree,
 	//   @node is @path's last node
 	assert(path->nodes[path->height-1] == node);
 	//   @right is right of @node
-	assert(pnode->kvp[pnode_slot+1].val == &right->n_hdr);
+	assert(get_right_sibling(node, path) == right);
 	//   no need to COW
 	assert(node->n_hdr.ver == right->n_hdr.ver);
 	//   there are enough items in @node
@@ -533,20 +628,22 @@ move_items_right(vbpt_tree_t *tree,
 	node->items_nr -= mv_items;
 	right->items_nr += mv_items;
 	// update @node
-	uint16_t node_deleted = 0;
+	uint16_t delete_node = 0;
 	if (node->items_nr == 0) {
-		delete_ptr(tree, pnode, pnode_slot, path, path->height -2);
-		vbpt_node_putref(node);
-		node_deleted = 1;
+		vbpt_hdr_t *d;
+		d = delete_ptr(tree, pnode, pnode_slot, path, path->height -2);
+		assert(d == &node->n_hdr);
+		delete_node = 1;
 	}
 	// update @path
 	if (node_slot >= node->items_nr) {
 		path->nodes[path->height - 1] = right;
 		path->slots[path->height - 1] = node_slot - node->items_nr;
-		path->slots[path->height - 2] = pnode_slot +1 - node_deleted;
+		path->slots[path->height - 2] = pnode_slot +1 - delete_node;
 	}
-	// update ancestors
-	if (!node_deleted)
+	if (delete_node) // release node
+		vbpt_node_putref(node);
+	else            // update ancestors
 		update_highkey(node, pnode_slot, path, path->height -2);
 	assert(vbpt_path_verify(tree, path));
 }
@@ -601,8 +698,9 @@ move_items_left_right(vbpt_tree_t *tree, vbpt_node_t  *node,
 
 	uint16_t node_deleted = 0;
 	if (node->items_nr == 0) {
-		delete_ptr(tree, pnode, pnode_slot, path, path->height -2);
-		vbpt_node_putref(node);
+		vbpt_hdr_t *d;
+		d = delete_ptr(tree, pnode, pnode_slot, path, path->height -2);
+		assert(d == &node->n_hdr);
 		node_deleted = 1;
 	}
 	// update @path
@@ -622,7 +720,10 @@ move_items_left_right(vbpt_tree_t *tree, vbpt_node_t  *node,
 	path->slots[path->height -1] = node_slot;
 	path->slots[path->height -2] = pnode_slot;
 	update_highkey(left, left_slot, path, path->height - 2);
-	if (!node_deleted)
+
+	if (node_deleted)
+		vbpt_node_putref(node);
+	else
 		update_highkey(node, left_slot +1, path, path->height -2);
 	assert(vbpt_path_verify(tree, path));
 
@@ -723,34 +824,6 @@ balance_left(vbpt_tree_t *tree,
 	move_items_from_left(tree, node, left, path, mv_items);
 }
 
-/**
- * get left sibling of @node if it exists, or NULL
- */
-static vbpt_node_t *
-get_left_sibling(vbpt_node_t *node, vbpt_path_t *path)
-{
-	vbpt_node_t *ret = NULL;
-	vbpt_node_t *pnode = path->nodes[path->height-2];
-	uint16_t pslot     = path->slots[path->height-2];
-	assert(node == path->nodes[path->height-1]);
-	assert(node == hdr2node(pnode->kvp[pslot].val));
-	if (pslot > 0)
-		ret = hdr2node(pnode->kvp[pslot-1].val);
-	return ret;
-}
-
-static vbpt_node_t *
-get_right_sibling(vbpt_node_t *node, vbpt_path_t *path)
-{
-	vbpt_node_t *ret = NULL;
-	vbpt_node_t *pnode = path->nodes[path->height-2];
-	uint16_t pslot     = path->slots[path->height-2];
-	assert(node == path->nodes[path->height-1]);
-	assert(node == hdr2node(pnode->kvp[pslot].val));
-	if (pslot < pnode->items_nr - 1)
-		ret = hdr2node(pnode->kvp[pslot+1].val);
-	return ret;
-}
 
 /**
  * try balance around last node in the path -- i.e., pnode
@@ -813,12 +886,12 @@ add_new_root(vbpt_tree_t *tree, vbpt_path_t *path)
 	vbpt_node_t *old_root = tree->root;
 	// create a new root with a single key, the maximum (i.e., last) key of
 	// current root
-	vbpt_node_t *root = vbpt_alloc_node(VBPT_NODE_SIZE, tree->ver);
+	vbpt_node_t *root = vbpt_node_alloc(VBPT_NODE_SIZE, tree->ver);
 	uint64_t key_max = old_root->kvp[old_root->items_nr - 1].key;
 	root->kvp[0].key = key_max;
 	root->kvp[0].val = &old_root->n_hdr; // we already hold a reference
 	root->items_nr = 1;
-	tree->root = vbpt_node_getref(root);
+	tree->root = root;
 	tree->height++;
 	// update path
 	assert(path->height == 1);
@@ -858,7 +931,7 @@ split_node(vbpt_tree_t *tree, vbpt_path_t *path)
 	assert(ver_eq(ver, parent->n_hdr.ver));
 	uint16_t parent_slot = path->slots[path->height - 2];
 
-	vbpt_node_t *new = vbpt_alloc_node(VBPT_NODE_SIZE, ver);
+	vbpt_node_t *new = vbpt_node_alloc(VBPT_NODE_SIZE, ver);
 	uint16_t mid = (node->items_nr + 1) / 2;
 
 	/* no need to update references, just memcpy */
@@ -871,7 +944,7 @@ split_node(vbpt_tree_t *tree, vbpt_path_t *path)
 	assert(node->items_nr == mid);
 
 	vbpt_hdr_t *old;
-	old = insert_ptr(parent, parent_slot + 1, new->kvp[new->items_nr - 1].key, &new->n_hdr);
+	old = insert_ptr(parent, parent_slot+1, new->kvp[new->items_nr - 1].key, &new->n_hdr);
 	if (old != NULL) {
 		fprintf(stderr, "got an old pointer: %p\n", old);
 		if (old->type == VBPT_NODE)
@@ -932,7 +1005,7 @@ search_split_node(vbpt_tree_t *tree, vbpt_path_t *path, uint64_t key)
 static inline int
 try_decrease_height(vbpt_tree_t *tree, vbpt_path_t *path)
 {
-	if (path->height > 1)     // we must be at the root
+	if (path->height > 1)     // if we are at the root, bail out
 		return 0;
 
 	vbpt_node_t *root = path->nodes[0];
@@ -950,7 +1023,10 @@ try_decrease_height(vbpt_tree_t *tree, vbpt_path_t *path)
 
 	vbpt_node_t *next = hdr2node(hdr_next);
 	tree->root = next;
+
+	root->items_nr = 0;
 	vbpt_hdr_putref(&root->n_hdr);
+
 	tree->height--;
 	return 1;
 }
@@ -968,6 +1044,10 @@ vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
 	/* helper function: check if cow is needed */
 	bool do_cow(ver_t *v) {
 		bool ret = (op != 0) && !ver_eq(cow_ver, v);
+		if (!ver_leq(v,cow_ver)) {
+			vbpt_tree_print(tree, true);
+			printf("v=%p cow_ver=%p\n", v, cow_ver);
+		}
 		assert(ver_leq(v, cow_ver));
 		return ret;
 	}
@@ -979,6 +1059,8 @@ vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
 		path->nodes[lvl] = node;
 		path->slots[lvl] = slot;
 		path->height = lvl + 1;
+
+		assert(node->items_nr > 0);
 
 		if (op < 0) { // deletion
 			if (try_decrease_height(tree, path) == 1) {
@@ -1038,9 +1120,9 @@ static void
 make_new_root(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t *data)
 {
 	assert(tree->height == 0);
-	tree->root = vbpt_alloc_node(VBPT_NODE_SIZE, tree->ver);
+	tree->root = vbpt_node_alloc(VBPT_NODE_SIZE, tree->ver);
 	tree->root->kvp[0].key = key;
-	tree->root->kvp[0].val = vbpt_hdr_getref(&data->l_hdr);
+	tree->root->kvp[0].val = &data->l_hdr;
 	tree->root->items_nr++;
 	tree->height = 1;
 }
@@ -1050,7 +1132,7 @@ make_new_root(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t *data)
  *  If a leaf already exists for @key:
  *    - it will be placed in @old_data if @old_data is not NULL
  *    - it will be decrefed if @old_data is NULL
- * @data's refcount will be increased
+ * @data's refcount will not be increased
  */
 void
 vbpt_insert(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t *data, vbpt_leaf_t **old_data)
@@ -1095,7 +1177,7 @@ vbpt_delete(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t **data)
 
 end:
 	if (data)
-		*data = NULL;
+		*data = ret;
 	else if (ret != NULL)
 		vbpt_leaf_putref(ret);
 }
@@ -1114,20 +1196,20 @@ do_insert_test(int rand_seed, uint64_t ins_nr, uint64_t *ins_buff)
 	//vbpt_gv_reset();
 
 	ver_t *v = ver_create();
-	vbpt_tree_t *t = vbpt_alloc_tree(v);
-	//vbpt_leaf_t *l1 = vbpt_alloc_leaf(VBPT_LEAF_SIZE, v);
-	//vbpt_leaf_t *l2 = vbpt_alloc_leaf(VBPT_LEAF_SIZE, v);
+	vbpt_tree_t *t = vbpt_tree_alloc(v);
+	//vbpt_leaf_t *l1 = vbpt_leaf_alloc(VBPT_LEAF_SIZE, v);
+	//vbpt_leaf_t *l2 = vbpt_leaf_alloc(VBPT_LEAF_SIZE, v);
 	//vbpt_insert(t, 42, l1, NULL);
 	//vbpt_insert(t, 100, l2, NULL);
 	for (uint64_t i=0; i < ins_nr; i++) {
 		uint64_t k = (rand_seed) ? rand() % 1024 : i;
-		vbpt_leaf_t *l = vbpt_alloc_leaf(VBPT_LEAF_SIZE, v);
-		printf("INSERTING %lu key=%lu\n", i, k);
+		vbpt_leaf_t *l = vbpt_leaf_alloc(VBPT_LEAF_SIZE, v);
+		printf("INSERTING %lu key=%lu [leaf:%p]\n", i, k, l);
 		if (ins_buff)
 			ins_buff[i] = k;
 		vbpt_insert(t, k, l, NULL);
-		printf("AFTER insert %lu key=%lu\n", i, k);
-		//vbpt_node_print(t->root, 0, true);
+		//printf("AFTER insert %lu key=%lu\n", i, k);
+		//vbpt_tree_print(t, true);
 	}
 	printf("root->items_total=%d\n", t->root->items_total);
 	printf("root->items_nr=%d\n", t->root->items_nr);
@@ -1137,7 +1219,7 @@ do_insert_test(int rand_seed, uint64_t ins_nr, uint64_t *ins_buff)
 	return t;
 }
 
-static void __attribute__ ((unused))
+static vbpt_tree_t * __attribute__ ((unused))
 do_delete_test(int insert_seed, int delete_seed, uint64_t nr)
 {
 	uint64_t ins[nr];
@@ -1146,7 +1228,7 @@ do_delete_test(int insert_seed, int delete_seed, uint64_t nr)
 	if (delete_seed)
 		srand(delete_seed);
 
-	vbpt_tree_print(t, true);
+	//vbpt_tree_print(t, true);
 	for (uint64_t i=0; i < nr; i++) {
 		uint64_t idx;
 		do {
@@ -1156,9 +1238,10 @@ do_delete_test(int insert_seed, int delete_seed, uint64_t nr)
 		ins[idx] = ~0UL;
 		printf("DELETING %lu key=%lu\n", i, k);
 		vbpt_delete(t, k, NULL);
-		printf("AFTER delete %lu key=%lu\n", i, k);
-		vbpt_tree_print(t, true);
+		//printf("AFTER delete %lu key=%lu\n", i, k);
+		//vbpt_tree_print(t, true);
 	}
+	return t;
 }
 
 int main(int argc, const char *argv[])
@@ -1173,9 +1256,9 @@ int main(int argc, const char *argv[])
 
 	#if 0
 	ver_t *v = ver_create();
-	vbpt_tree_t *t = vbpt_alloc_tree(v);
-	vbpt_leaf_t *l1 = vbpt_alloc_leaf(VBPT_LEAF_SIZE, v);
-	vbpt_leaf_t *l2 = vbpt_alloc_leaf(VBPT_LEAF_SIZE, v);
+	vbpt_tree_t *t = vbpt_tree_alloc(v);
+	vbpt_leaf_t *l1 = vbpt_leaf_alloc(VBPT_LEAF_SIZE, v);
+	vbpt_leaf_t *l2 = vbpt_leaf_alloc(VBPT_LEAF_SIZE, v);
 	vbpt_insert(t, 42, l1, NULL);
 	vbpt_insert(t, 100, l2, NULL);
 	vbpt_tree_print(t, true);
@@ -1188,14 +1271,18 @@ int main(int argc, const char *argv[])
 	#if 1
 	for (unsigned i=0; i<=10; i++)
 		for (unsigned j=0; j<=666; j++) {
-			fprintf(stderr, "DELETION test=(%u,%u)\n", i, j);
-			do_delete_test(i, j, 128);
+			//fprintf(stderr, "DELETION test=(%u,%u)\n", i, j);
+			vbpt_tree_t *t = do_delete_test(i, j, 128);
+			vbpt_tree_dealloc(t);
 		}
 	#endif
 
-	#if 1
-	//do_delete_test(0, 0, 128);
-	//do_delete_test(0, 1, 128);
+	#if 0
+	vbpt_tree_t *t;
+	//vbpt_tree_t *t = do_delete_test(0, 0, 128);
+	//vbpt_tree_dealloc(t);
+	t = do_delete_test(0, 1, 32);
+	vbpt_tree_dealloc(t);
 	//do_delete_test(0, 2, 128);
 	//do_delete_test(1, 0, 1024);
 	#endif
