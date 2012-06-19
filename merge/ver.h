@@ -10,8 +10,32 @@
 struct ver {
 	struct ver *parent;
 	refcnt_t   v_refcnt;
+	#ifndef NDEBUG
+	size_t v_id;
+	#endif
 };
 typedef struct ver ver_t;
+
+
+static void
+ver_init(ver_t *ver)
+{
+	#ifndef NDEBUG
+	static size_t id = 0;
+	spinlock_t *lock_ptr = NULL;
+	spinlock_t lock;
+	#endif
+	refcnt_init(&ver->v_refcnt, 1);
+	#ifndef NDEBUG
+	if (lock_ptr == NULL) {
+		spinlock_init(&lock);
+		lock_ptr = &lock;
+	}
+	spin_lock(lock_ptr);
+	ver->v_id = id++;
+	spin_unlock(lock_ptr);
+	#endif
+}
 
 static inline ver_t *
 refcnt2ver(refcnt_t *rcnt)
@@ -58,7 +82,7 @@ ver_create(void)
 {
 	ver_t *ret = xmalloc(sizeof(ver_t));
 	ret->parent = NULL;
-	refcnt_init(&ret->v_refcnt, 1);
+	ver_init(ret);
 	return ret;
 }
 
@@ -67,10 +91,11 @@ static inline ver_t *
 ver_branch(ver_t *parent)
 {
 	/* allocate and initialize new version */
-	ver_t *v = xmalloc(sizeof(ver_t));
+	ver_t *ret = xmalloc(sizeof(ver_t));
+	ver_init(ret);
 	/* increase the reference count of the parent */
-	v->parent = ver_getref(parent);
-	return v;
+	ret->parent = ver_getref(parent);
+	return ret;
 }
 
 

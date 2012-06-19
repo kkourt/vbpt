@@ -6,17 +6,46 @@
 #include <graphviz/gvc.h>
 
 #include "darray.h"
+#include "hash.h"
 
 #include "vbpt.h"
 #include "vbpt_gv.h"
 
 static Agraph_t *gvGraph = NULL;
 
+static char *fillcolors[] = {"red", "blue", "orange", "yellow", "green"};
+static char *
+get_fillcolor(ver_t *ver)
+{
+	static int cnt=0;
+	static hash_t *h = NULL;
+	if (!h) {
+		h = hash_init(128);
+	}
+
+	unsigned long color = hash_lookup(h, (unsigned long)ver);
+	if (color == HASH_ENTRY_NOTFOUND) {
+		hash_ins(h, (unsigned long)ver, color=cnt++);
+	}
+
+	assert(color < sizeof(fillcolors));
+	return fillcolors[color];
+}
+
 static void
 do_agset(void *obj, char *attr, char *value)
 {
-	if (agset(obj, attr, value) == -1)
+	if (agset(obj, attr, value) == -1) {
 		fprintf(stderr, "Couldn't set [%s,%s] to %p\n", attr,value,obj);
+	}
+
+}
+
+static void
+do_agattr(void *obj, char *attr, char *value)
+{
+	if (agattr(obj, attr, value) == NULL) // is this check correct?
+		fprintf(stderr, "Couldn't set attribute [%s,%s] to %p\n", attr,value,obj);
 }
 
 static Agraph_t *
@@ -29,6 +58,7 @@ get_graph(void)
 		agnodeattr(NULL, "shape", "oval");
 		agraphattr(NULL, "style", "invis");
 		agraphattr(NULL, "color", "black");
+		agnodeattr(NULL, "fillcolor", "pink");
 		agnodeattr(NULL, "label", "");
 		agnodeattr(NULL, "rankdir", "");
 		gvGraph = agopen("VBPT", AGDIGRAPHSTRICT);
@@ -80,6 +110,7 @@ vbpt_add_leaf(vbpt_leaf_t *leaf)
 	}
 
 	n = agnode(g, node_name);
+	do_agset(n, "fillcolor", get_fillcolor(leaf->l_hdr.ver));
 	return n;
 }
 
@@ -98,6 +129,8 @@ vbpt_gv_add_node(vbpt_node_t *node)
 
 	n = agnode(g, node_name);
 	do_agset(n, "shape", "record");
+	do_agattr(n, "style", "filled");
+	do_agset(n, "fillcolor", get_fillcolor(node->n_hdr.ver));
 
 	/* create label */
 	darray_char da_label;
