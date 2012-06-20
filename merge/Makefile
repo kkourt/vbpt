@@ -10,8 +10,8 @@ all:  vbpt-test
 vbpt.o: vbpt.c $(hdrs)
 	$(CC) $(CFLAGS) $< -c -o $@
 
-vbpt-test: vbpt.c vbpt_gv.c hash.c $(hdrs)
-	$(CC) $(CFLAGS) $(LIBS) -lgraph -DVBPT_TEST vbpt.c vbpt_gv.c hash.c -o $@
+vbpt-test: vbpt.c vbpt_gv.c phash.c $(hdrs)
+	$(CC) $(CFLAGS) $(LIBS) -lgraph -DVBPT_TEST vbpt.c vbpt_gv.c phash.c -o $@
 
 vbpt_gv.o: vbpt_gv.c $(hdrs)
 	$(CC) $(CFLAGS) $< -c -o $@

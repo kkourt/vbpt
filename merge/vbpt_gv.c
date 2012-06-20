@@ -6,7 +6,7 @@
 #include <graphviz/gvc.h>
 
 #include "darray.h"
-#include "hash.h"
+#include "phash.h"
 
 #include "vbpt.h"
 #include "vbpt_gv.h"
@@ -18,14 +18,16 @@ static char *
 get_fillcolor(ver_t *ver)
 {
 	static int cnt=0;
-	static hash_t *h = NULL;
+	static phash_t *h = NULL;
 	if (!h) {
-		h = hash_init(128);
+		h = phash_new(10);
 	}
 
-	unsigned long color = hash_lookup(h, (unsigned long)ver);
-	if (color == HASH_ENTRY_NOTFOUND) {
-		hash_ins(h, (unsigned long)ver, color=cnt++);
+	unsigned long color;
+	int ret = phash_lookup(h, (unsigned long)ver, &color);
+	if (!ret) {
+		color = cnt++;
+		phash_insert(h, (unsigned long)ver, color);
 	}
 
 	assert(color < sizeof(fillcolors));
