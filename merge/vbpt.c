@@ -1420,6 +1420,52 @@ mv_ins_test(void)
 		}
 }
 
+static void __attribute__((unused))
+do_mv_insdel_test(int ins_seed, int del_seed, uint64_t nr1, uint64_t nr2,
+                  vbpt_tree_t **t0_ret, vbpt_tree_t **t_ret)
+{
+	uint64_t ins[nr1];
+	vbpt_tree_t *t0 = do_insert_test(ins_seed, nr1, ins);
+	vbpt_tree_t *t = vbpt_tree_branch(t0);
+
+	if (del_seed)
+		srand(del_seed);
+
+	assert(nr1>=nr2);
+	for (uint64_t i=0; i < nr2; i++) {
+		uint64_t idx;
+		do {
+			idx = (del_seed) ? rand() % nr1 : i;
+		} while (ins[idx] == ~0UL);
+		uint64_t k = ins[idx];
+		ins[idx] = ~0UL;
+		printf("DELETING %lu key=%lu\n", i, k);
+		vbpt_delete(t, k, NULL);
+		//printf("AFTER insert %lu key=%lu\n", i, k);
+		//vbpt_tree_print(t, true);
+	}
+
+
+	if (t0_ret)
+		*t0_ret = t0;
+	if (t_ret)
+		*t_ret = t;
+}
+
+static void __attribute__((unused))
+mv_insdel_test(void)
+{
+
+	vbpt_tree_t *t0, *t;
+	for (unsigned i=0; i<=10; i++)
+		for (unsigned j=0; j<=666; j++) {
+			fprintf(stderr, "MV_INSDEL test=(%u,%u)\n", i, j);
+			do_mv_insdel_test(i, j, 128, 64, &t0, &t);
+			vbpt_tree_dealloc(t);
+			vbpt_tree_dealloc(t0);
+		}
+}
+
 int main(int argc, const char *argv[])
 {
 
@@ -1449,6 +1495,7 @@ int main(int argc, const char *argv[])
 	//insert_test();
 	//delete_test();
 	//mv_ins_test();
+	//mv_insdel_test();
 
 	return 0;
 }
