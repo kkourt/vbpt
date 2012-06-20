@@ -18,14 +18,15 @@
 	#define spin_unlock(x) OSSpinLockUnlock(x)
 #endif
 
+#include <stdlib.h> // malloc
 #include <stdio.h> // perror
 
-#define xmalloc(s) ({            \
-	void *ret_ = malloc(s);      \
-	if (ret_ == NULL) {          \
-		perror("malloc");        \
-		exit(1);                 \
-	}                            \
+#define xmalloc(s) ({              \
+	void *ret_ = malloc(s);    \
+	if (ret_ == NULL) {        \
+		perror("malloc");  \
+		exit(1);           \
+	}                          \
 	ret_;})
 
 #endif
