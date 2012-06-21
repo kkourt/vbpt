@@ -2,6 +2,7 @@
 #define REFCNT_H_
 
 #include <inttypes.h>
+#include <assert.h>
 #include "misc.h"
 
 // Documentation/kref.txt in linux kernel is an interesting and relevant read

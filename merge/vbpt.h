@@ -5,6 +5,8 @@
 #define VBPT_MAX_LEVEL 64
 
 #include <inttypes.h>
+#include <string.h> /* memcpy, memmove */
+
 #include "refcnt.h"
 #include "ver.h"
 #include "container_of.h"

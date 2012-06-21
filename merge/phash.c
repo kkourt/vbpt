@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 /* python hash for C
  *  originally by gtsouk@cslab.ece.ntua.gr
@@ -20,83 +21,151 @@
 
 #define PERTURB_SHIFT 5
 
-item_t *items_new(ul_t nr_items)
+static ul_t *
+kvs_new(ul_t nr_items, bool vals)
 {
     ul_t i;
-    item_t *items = malloc(nr_items*sizeof(item_t));
-
-    if (!items) {
+    size_t keys_size = nr_items*sizeof(ul_t);
+    size_t alloc_size = vals ? keys_size<<2 : keys_size;
+    ul_t *kvs = malloc(alloc_size);
+    if (!kvs) {
         perror("malloc");
         exit(1);
+    }
+
+    if (!vals) {
+        for (i=0; i < nr_items; i++)
+            kvs[i] = UNUSED;
+        return kvs;
     }
 
     for (i=0; i < nr_items; i++){
-        #ifdef VAL_OVERLOAD
-        items[i].v = UNUSED;
-        #elif  KEY_OVERLOAD
-        items[i].k = UNUSED;
+        #if defined(VAL_OVERLOAD)
+        assert(vals);
+        kvs[nr_items + i] = UNUSED;
+        #elif  defined(KEY_OVERLOAD)
+        kvs[i] = UNUSED;
         #endif
     }
 
-    return items;
+    return kvs;
 }
 
-static inline unsigned item_dummy(item_t *item)
+static inline void
+set_dummy_key(phash_t *phash, ul_t idx)
 {
-    #ifdef VAL_OVERLOAD
-    return (item->v == DUMMY);
-    #elif KEY_OVERLOAD
-    return (item->k == DUMMY);
-    #endif
+    phash->kvs[idx] = DUMMY;
 }
 
-static void make_item_dummy(item_t *item)
+static inline void
+set_dummy_val(phash_t *phash, ul_t idx)
 {
-    #ifdef VAL_OVERLOAD
-    item->v = DUMMY;
-    #elif KEY_OVERLOAD
-    item->k = DUMMY;
-    #endif
+    ul_t *vals = phash_vals(phash);
+    vals[idx] = DUMMY;
 }
 
-static inline unsigned item_unused(item_t *item)
+static bool
+item_dummy(phash_t *phash, ul_t idx, bool vals)
 {
-    #ifdef VAL_OVERLOAD
-    return (item->v == UNUSED);
-    #elif KEY_OVERLOAD
-    return (item->k == UNUSED);
-    #endif
+    bool ret;
+    if (!vals) {
+        ret = (phash->kvs[idx] == DUMMY);
+    } else {
+        #if defined(VAL_OVERLOAD)
+        assert(vals);
+        ul_t *vals = phash_vals(phash);
+        ret = (vals[idx] == DUMMY);
+        #elif defined(KEY_OVERLOAD)
+        ret = (phash->kvs[idx] == DUMMY);
+        #endif
+    }
+    return ret;
+
 }
 
-static inline unsigned item_valid(item_t *item)
+static void set_dummy_item(phash_t *phash, ul_t idx, bool vals)
 {
-    return !(item_dummy(item) || item_unused(item));
-}
-
-static inline void assert_key(ul_t key)
-{
-    #if KEY_OVERLOAD
-    assert((key != UNUSED) && (key != DUMMY));
-    #endif
-}
-
-static void assert_val(ul_t val)
-{
-    #ifdef VAL_OVERLOAD
-    assert((val != UNUSED) && (val != DUMMY));
-    #endif
-}
-
-struct phash *phash_new(ul_t minsize_shift) {
-    struct phash *phash;
-
-    phash = malloc(sizeof(struct phash));
-    if (!phash) {
-        perror("malloc");
-        exit(1);
+    if (!vals) {
+        set_dummy_key(phash, idx);
+        return;
     }
 
-    phash->items = items_new(1UL<<minsize_shift);
+    #ifdef VAL_OVERLOAD
+    assert(vals);
+    set_dummy_val(phash, idx);
+    return;
+    #elif defined(KEY_OVERLOAD)
+    set_dummy_key(phash, idx);
+    return;
+    #endif
+}
+static inline void
+set_unused_key(phash_t *phash, ul_t idx)
+{
+    phash->kvs[idx] = UNUSED;
+}
+
+static inline void
+set_unused_val(phash_t *phash, ul_t idx)
+{
+    ul_t *vals = phash_vals(phash);
+    vals[idx] = UNUSED;
+}
+
+static inline bool
+val_unused(phash_t *phash, ul_t idx)
+{
+    ul_t *vals = phash_vals(phash);
+    return vals[idx] == UNUSED;
+}
+
+static bool
+item_unused(phash_t *phash, ul_t idx, bool vals)
+{
+    if (!vals) {
+        return phash->kvs[idx] == UNUSED;
+    }
+
+    #if defined(VAL_OVERLOAD)
+    assert(vals);
+    return val_unused(phash, idx);
+    #elif defined(KEY_OVERLOAD)
+    return phash->kvs[idx] == UNUSED;
+    #endif
+
+}
+
+static inline unsigned item_valid(phash_t *phash, ul_t idx, bool vals)
+{
+    return !(item_dummy(phash, idx, vals) || item_unused(phash, idx, vals));
+}
+
+static void __attribute__((unused))
+assert_key(ul_t key)
+{
+    assert((key != UNUSED) && (key != DUMMY));
+}
+
+static void
+assert_val(ul_t val)
+{
+    assert((val != UNUSED) && (val != DUMMY));
+}
+
+static inline void
+assert_kv(ul_t k, ul_t v)
+{
+    #if defined(KEY_OVERLOAD)
+    assert_key(k);
+    #elif defined(VAL_OVERLOAD)
+    assert_val(v);
+    #endif
+}
+
+void
+phash_init__(phash_t *phash, ul_t minsize_shift, bool vals)
+{
+    phash->kvs = kvs_new(1UL<<minsize_shift, vals);
     phash->dummies = phash->used = 0;
     phash->size_shift = phash->minsize_shift = minsize_shift;
 
@@ -104,50 +173,34 @@ struct phash *phash_new(ul_t minsize_shift) {
     ZEROSTAT(phash->deletes);
     ZEROSTAT(phash->lookups);
     ZEROSTAT(phash->bounces);
+}
 
+
+phash_t *
+phash_new__(ul_t minsize_shift, bool vals) {
+    struct phash *phash;
+    phash = malloc(sizeof(struct phash));
+    if (!phash) {
+        perror("malloc");
+        exit(1);
+    }
+    phash_init__(phash, minsize_shift, vals);
     return phash;
 }
 
-void phash_free(struct phash *phash)
+
+void
+phash_resize__(struct phash *phash, ul_t new_size_shift, bool vals)
 {
+    ul_t new_size = (ul_t)1UL<<new_size_shift;
 
-    REPSTAT(phash->inserts);
-    REPSTAT(phash->deletes);
-    REPSTAT(phash->lookups);
-    REPSTAT(phash->bounces);
-
-    free(phash->items);
-    free(phash);
-}
-
-
-ul_t phash_resize(struct phash *phash, ul_t new_size_shift)
-{
-    ul_t old_size_shift = phash->size_shift;
-    ul_t new_size = (ul_t)1<<new_size_shift;
-    item_t *old_items;
-    //fprintf(stderr, "resize: %lu -> %lu\n", old_size_shift, new_size_shift);
-
-    old_items = phash->items;
-    phash->items = items_new(new_size);
+    phash->kvs = kvs_new(new_size, vals);
     phash->dummies = phash->used = 0;
     phash->size_shift = new_size_shift;
-
-    ul_t old_size = ((ul_t)1 << old_size_shift);
-    ul_t i;
-    for (i = 0; i < old_size; i++) {
-        item_t *item = &old_items[i];
-        if (item_valid(item)){
-            //fprintf(stderr, "rs: inserting (%lu,%lu)\n", item->k, item->v);
-            phash_insert(phash, item->k, item->v);
-        }
-    }
-
-    free(old_items);
-    return new_size_shift;
 }
 
-ul_t phash_grow(struct phash *phash)
+static ul_t
+grow_size_shift(phash_t *phash)
 {
     ul_t old_size_shift = phash->size_shift;
     ul_t new_size_shift;
@@ -160,81 +213,177 @@ ul_t phash_grow(struct phash *phash)
         new_size_shift = old_size_shift;
     }
 
-    return phash_resize(phash, new_size_shift);
+    return new_size_shift;
 }
 
-ul_t phash_shrink(struct phash *phash)
+static ul_t
+shrink_size_shift(phash_t *phash)
 {
     ul_t old_size_shift = phash->size_shift;
     ul_t new_size_shift;
-
     new_size_shift = old_size_shift - 1;
     if (new_size_shift < phash->minsize_shift) {
         new_size_shift = phash->minsize_shift;
     }
-
-    return phash_resize(phash, new_size_shift);
+    return new_size_shift;
 }
 
-static inline ul_t phash_grow_check(phash_t *phash)
+static bool
+grow_check(phash_t *phash)
 {
     ul_t size_shift = phash->size_shift;
     ul_t u = phash->used + phash->dummies;
-    ul_t size = (ul_t)1<<size_shift;
-    if ((u/2 + u) >= size) {
-        size_shift = phash_grow(phash);
-        size = (ul_t)1<<size_shift;
+    ul_t size = (ul_t)1UL<<size_shift;
+    return ((u/2 + u) >= size) ? true : false;
+}
+
+int
+phash_delete__(phash_t *phash, ul_t key, bool vals)
+{
+    ul_t perturb = key;
+    ul_t mask = phash_size(phash)-1;
+    ul_t idx = key & mask;
+    for (;;) {
+        if ( item_unused(phash, idx, vals) ){
+            assert(0);
+            return 0;
+        }
+
+        if ( !item_dummy(phash, idx, vals) && phash->kvs[idx] == key){
+            INCSTAT(phash->deletes);
+            set_dummy_item(phash, idx, vals);
+            phash->dummies++;
+            //fprintf(stderr, "rm: used: %lu\n", phash->used);
+            phash->used--;
+            return 1;
+        }
+
+        INCSTAT(phash->bounces);
+        idx = ((idx<<2) + idx + 1 + perturb) & mask;
+        perturb >>= PERTURB_SHIFT;
+    }
+}
+
+/**
+ * Phash functions
+ */
+
+phash_t *
+phash_new(ul_t minsize_shift)
+{
+    return phash_new__(minsize_shift, true);
+}
+
+void phash_free(struct phash *phash)
+{
+
+    REPSTAT(phash->inserts);
+    REPSTAT(phash->deletes);
+    REPSTAT(phash->lookups);
+    REPSTAT(phash->bounces);
+
+    free(phash->kvs);
+    free(phash);
+}
+
+void
+phash_resize(phash_t *phash, ul_t new_size_shift)
+{
+    phash_t  old;
+    phash_cp(&old, phash);
+
+    phash_resize__(phash, new_size_shift, true);
+    for (ul_t i = 0; i < phash_size(&old); i++) {
+        if (item_valid(&old, i, true)){
+            //fprintf(stderr, "rs: inserting (%lu,%lu)\n", item->k, item->v);
+            phash_insert(phash, old.kvs[i], *(phash_vals(&old) + i));
+        }
     }
 
-    return size;
+    free(old.kvs);
 }
 
-#define PHASH_UPDATE(phash, key, val)               \
-{                                                   \
-    ul_t size = 1<<(phash->size_shift);             \
-    item_t *items = phash->items;                   \
-    ul_t perturb = key;                             \
-    ul_t mask = size-1;                             \
-    ul_t i = key & mask;                            \
-                                                    \
-    INCSTAT(phash->inserts);                        \
-    for (;;) {                                      \
-        item_t *item = &items[i];                   \
-        if ( !item_valid(item) ){                   \
-             PHUPD_SET__(phash, item, key, val);    \
-             break;                                 \
-        }                                           \
-        if (item->k == key){                        \
-            PHUPD_UPDATE__(phash, item, key, val);  \
-            break;                                  \
-        }                                           \
-                                                    \
-        again: __attribute__((unused))              \
-        INCSTAT(phash->bounces);                    \
-        i = ((i<<2) + i + 1 + perturb) & mask;      \
-        perturb >>= PERTURB_SHIFT;                  \
-    }                                               \
-}
 
-void static inline phash_upd_set(phash_t *p, item_t *i, ul_t key, ul_t val)
+void
+phash_grow(struct phash *phash)
 {
-    if (item_dummy(i))
+    ul_t new_size_shift = grow_size_shift(phash);
+    phash_resize(phash, new_size_shift);
+}
+
+void
+phash_shrink(struct phash *phash)
+{
+    ul_t new_size_shift = shrink_size_shift(phash);
+    phash_resize(phash, new_size_shift);
+}
+
+static inline void
+phash_grow_check(phash_t *phash)
+{
+    if (grow_check(phash))
+        phash_grow(phash);
+}
+
+#define PHASH_UPDATE(phash, key, val, vals_flag)      \
+{                                                     \
+    ul_t size = 1UL<<(phash->size_shift);             \
+    ul_t perturb = key;                               \
+    ul_t mask = size-1;                               \
+    ul_t idx = key & mask;                            \
+                                                      \
+    INCSTAT(phash->inserts);                          \
+    for (;;) {                                        \
+        if ( !item_valid(phash, idx, vals_flag) ){    \
+             PHUPD_SET__(phash, idx, key, val);       \
+             break;                                   \
+        }                                             \
+        if (phash->kvs[idx] == key){                  \
+            PHUPD_UPDATE__(phash, idx, key, val);     \
+            break;                                    \
+        }                                             \
+                                                      \
+        again: __attribute__((unused))                \
+        INCSTAT(phash->bounces);                      \
+        idx = ((idx<<2) + idx + 1 + perturb) & mask;  \
+        perturb >>= PERTURB_SHIFT;                    \
+    }                                                 \
+}
+
+static inline void
+set_val(phash_t *p, ul_t idx, ul_t key, ul_t val)
+{
+    p->kvs[idx] = key;
+    ul_t *vals = phash_vals(p);
+    vals[idx] = val;
+}
+
+void static inline phash_upd_set(phash_t *p, ul_t idx, ul_t key, ul_t val)
+{
+    if (item_dummy(p, idx, true))
         p->dummies--;
     p->used++;
-    i->v = val;
-    i->k = key;
+    p->kvs[idx] = key;
+    ul_t *vals = phash_vals(p);
+    vals[idx] = val;
+}
+
+static inline void
+inc_val(phash_t *p, ul_t idx, ul_t val)
+{
+    ul_t *vals = phash_vals(p);
+    vals[idx] += val;
 }
 
 void phash_insert(struct phash *phash, ul_t key, ul_t val)
 {
 
     //fprintf(stderr, "insert: (%lu,%lu)\n", key, val);
-    assert_key(key);
-    assert_val(val);
+    assert_kv(key, val);
     phash_grow_check(phash);
-    #define PHUPD_UPDATE__(_p, _i, _k, _v) _i->v = _v
-    #define PHUPD_SET__(_p, _i, _k, _v) phash_upd_set(_p, _i, _k, _v)
-    PHASH_UPDATE(phash, key, val)
+    #define PHUPD_UPDATE__(_p, _i, _k, _v) set_val(_p, _i, _k, _v)
+    #define PHUPD_SET__(_p, _i, _k, _v)    phash_upd_set(_p, _i, _k, _v)
+    PHASH_UPDATE(phash, key, val, true)
     #undef PHUPD_UPDATE__
     #undef PHUPD_SET__
 }
@@ -242,12 +391,12 @@ void phash_insert(struct phash *phash, ul_t key, ul_t val)
 
 void phash_freql_update(struct phash *phash, ul_t key, ul_t val)
 {
-    assert_key(key);
+    assert_kv(key, val);
     assert_val(val);
     phash_grow_check(phash);
-    #define PHUPD_UPDATE__(_p, _i, _k, _v) _i->v += _v
-    #define PHUPD_SET__(_p, _i, _k, _v) phash_upd_set(_p, _i, _k, _v)
-    PHASH_UPDATE(phash, key, val)
+    #define PHUPD_UPDATE__(_p, _i, _k, _v) inc_val(_p, _i, _v)
+    #define PHUPD_SET__(_p, _i, _k, _v)    phash_upd_set(_p, _i, _k, _v)
+    PHASH_UPDATE(phash, key, val, true)
     #undef PHUPD_UPDATE__
     #undef PHUPD_SET__
 }
@@ -259,12 +408,10 @@ void phash_freql_update(struct phash *phash, ul_t key, ul_t val)
 int phash_update(struct phash *phash, ul_t key, ul_t val) {
 
     //fprintf(stderr, "update: (%lu,%lu)\n", key, val);
-    assert_key(key);
-    assert_val(val);
-
-    #define PHUPD_UPDATE__(_p, _i, _k, _v) _i->v = _v
-    #define PHUPD_SET__(_p, _i, _k, _v) goto again;
-    PHASH_UPDATE(phash, key, val)
+    assert_kv(key, val);
+    #define PHUPD_UPDATE__(_p, _i, _k, _v) set_val(_p, _i, _k, _v)
+    #define PHUPD_SET__(_p, _i, _k, _v)    goto again
+    PHASH_UPDATE(phash, key, val, true)
     #undef PHUPD_UPDATE__
     #undef PHUPD_SET__
 
@@ -273,91 +420,87 @@ int phash_update(struct phash *phash, ul_t key, ul_t val) {
 
 int phash_delete(struct phash *phash, ul_t key)
 {
+    #if defined(KEY_OVERLOAD)
     assert_key(key);
+    #endif
+    ul_t size_shift = phash->size_shift;
+    ul_t size = (ul_t)1<<size_shift;
+    ul_t u = phash->used;
+    if (4*u < size)
+        phash_shrink(phash);
+    return phash_delete__(phash, key, true);
+}
+
+int phash_lookup__(phash_t *phash, ul_t key, ul_t *idx_ret, bool vals)
+{
+    #if defined(KEY_OVERLOAD)
+    assert_key(key);
+    #endif
 
     ul_t size_shift = phash->size_shift;
     ul_t size = (ul_t)1<<size_shift;
-
-    ul_t u = phash->used;
-    if (4*u < size){
-        size_shift = phash_shrink(phash);
-        size = (ul_t)1<<size_shift;
-    }
-
-    item_t *items = phash->items;
     ul_t perturb = key;
     ul_t mask = size-1;
-    ul_t i = key & mask;
+    ul_t idx = key & mask;
 
+    INCSTAT(phash->lookups);
     for (;;) {
-        item_t *item = &items[i];
-
-        if ( item_unused(item) ){
-            assert(0);
+        if ( item_unused(phash, idx, vals) )
             return 0;
-        }
 
-        if ( !item_dummy(item) && item->k == key){
-            INCSTAT(phash->deletes);
-            make_item_dummy(item);
-            phash->dummies++;
-            //fprintf(stderr, "rm: used: %lu\n", phash->used);
-            phash->used--;
+        if ( !item_dummy(phash, idx, vals) && phash->kvs[idx] == key){
+            *idx_ret = idx;
             return 1;
         }
 
         INCSTAT(phash->bounces);
-        i = ((i<<2) + i + 1 + perturb) & mask;
+        idx = ((idx<<2) + idx + 1 + perturb) & mask;
         perturb >>= PERTURB_SHIFT;
     }
 }
 
 int phash_lookup(struct phash *phash, ul_t key, ul_t *val)
 {
-    assert_key(key);
+    ul_t idx;
+    int ret = phash_lookup__(phash, key, &idx, true);
+    if (ret) {
+        ul_t *values = phash_vals(phash);
+        *val = values[idx];
+    }
+    return ret;
+}
 
-    ul_t size_shift = phash->size_shift;
-    ul_t size = (ul_t)1<<size_shift;
-    item_t *items = phash->items;
-    ul_t perturb = key;
-    ul_t mask = size-1;
-    ul_t i = key & mask;
-
+int
+phash_iterate__(phash_t *phash, bool vals,
+                ul_t *loc, ul_t *key_ret,  ul_t *idx_ret)
+{
+    ul_t idx = *loc;
+    ul_t size = (ul_t)1<<phash->size_shift;
     INCSTAT(phash->lookups);
-    for (;;) {
-        item_t *item = &items[i];
-
-        if ( item_unused(item) )
+    for (;;){
+        if (idx >= size)
             return 0;
 
-        if ( !item_dummy(item) && item->k == key){
-            *val = item->v;
+        if (item_valid(phash, idx, vals)){
+            *key_ret = phash->kvs[idx];
+            *idx_ret = idx++;
+            *loc = idx;
             return 1;
         }
 
-        INCSTAT(phash->bounces);
-        i = ((i<<2) + i + 1 + perturb) & mask;
-        perturb >>= PERTURB_SHIFT;
+        idx++;
     }
 }
 
 int phash_iterate(struct phash *phash, ul_t *loc, ul_t *key, ul_t *val)
 {
-    ul_t i = *loc;
-    ul_t size = (ul_t)1<<phash->size_shift;
-    item_t *items = phash->items;
-    INCSTAT(phash->lookups);
-    for (;;){
-        if (i >= size)
-            return 0;
-        item_t *item = &items[i++];
-        if (item_valid(item)){
-            *loc = i;
-            *key = item->k;
-            *val = item->v;
-            return 1;
-        }
+    ul_t idx;
+    int ret = phash_iterate__(phash, true, loc, key, &idx);
+    if (ret) {
+        ul_t *vals = phash_vals(phash);
+        *val = vals[idx];
     }
+    return ret;
 }
 
 void phash_print(phash_t *phash)
@@ -461,4 +604,206 @@ int main(int argc, char **argv)
     return 0;
 }
 #endif
+
+
+/**
+ * Pset functions
+ */
+pset_t *
+pset_new(ul_t minsize_shift)
+{
+    return phash_new__(minsize_shift, false);
+}
+
+void
+pset_init(pset_t *pset, ul_t minsize_shift)
+{
+    phash_init__(pset, minsize_shift, false);
+}
+
+void
+pset_free(pset_t *pset)
+{
+    phash_free(pset);
+}
+
+void
+pset_freet(pset_t *pset)
+{
+    free(pset->kvs);
+}
+
+void
+pset_resize(pset_t *pset, ul_t new_size_shift)
+{
+    pset_t  old;
+    phash_cp(&old, pset);
+
+    phash_resize__(pset, new_size_shift, false);
+    for (ul_t i = 0; i < pset_size(&old); i++) {
+        if (item_valid(&old, i, false)){
+            //fprintf(stderr, "rs: inserting (%lu,%lu)\n", item->k, item->v);
+            pset_insert(pset, old.kvs[i]);
+        }
+    }
+    free(old.kvs);
+}
+
+void
+pset_grow(pset_t *pset)
+{
+    ul_t new_size_shift = grow_size_shift(pset);
+    pset_resize(pset, new_size_shift);
+}
+
+static inline void
+pset_grow_check(pset_t *pset)
+{
+    if (grow_check(pset))
+        pset_grow(pset);
+}
+
+void static inline pset_upd_set(phash_t *p, ul_t idx, ul_t key)
+{
+    if (item_dummy(p, idx, false))
+        p->dummies--;
+    p->used++;
+    p->kvs[idx] = key;
+}
+
+void pset_insert(pset_t *pset, ul_t key)
+{
+    assert_key(key);
+    pset_grow_check(pset);
+    #define PHUPD_UPDATE__(_p, _i, _k, _v) do { } while (0)
+    #define PHUPD_SET__(_p, _i, _k, _v) pset_upd_set(_p, _i, _k)
+    PHASH_UPDATE(pset, key, 0xdeadbabe, false)
+    #undef PHUPD_UPDATE__
+    #undef PHUPD_SET__
+}
+
+void
+pset_shrink(pset_t *pset)
+{
+    ul_t new_size_shift = shrink_size_shift(pset);
+    pset_resize(pset, new_size_shift);
+}
+
+int pset_delete(pset_t *pset, ul_t key)
+{
+    if (pset->used == 0)
+        return false;
+
+    assert_key(key);
+    ul_t size_shift = pset->size_shift;
+    ul_t size = (ul_t)1<<size_shift;
+    ul_t u = pset->used;
+    if (4*u < size)
+        pset_shrink(pset);
+    return phash_delete__(pset, key, false);
+}
+
+bool pset_lookup(pset_t *pset, ul_t key)
+{
+    ul_t idx;
+    return !!phash_lookup__(pset, key, &idx, false);
+}
+
+int pset_iterate(pset_t *pset, ul_t *loc, ul_t *key)
+{
+    ul_t idx;
+    int ret = phash_iterate__(pset, false, loc, key, &idx);
+    return ret;
+}
+
+void pset_print(pset_t *pset)
+{
+    ul_t i, key;
+    int ret;
+
+    printf("PSET(%p):\n", pset);
+    for (i=0 ;;){
+        ret = pset_iterate(pset, &i, &key);
+        if (!ret){
+            break;
+        }
+        printf(" 0x%017lx\n", key);
+    }
+    printf("\n");
+}
+
+#if defined(PSET_MAIN)
+#define BUFLEN 1024
+void help()
+{
+    printf("Help:\n"
+           "  insert : I <key> <val> \n"
+           "  get    : G <key>       \n"
+           "  delete : D <key>       \n"
+           "  size   : S             \n"
+           "  print  : P             \n");
+}
+
+int main(int argc, char **argv)
+{
+    pset_t *ps;
+    char *s, buf[BUFLEN];
+    ul_t key;
+    int ret;
+
+    ps = pset_new(2);
+
+    for (;;){
+        s = fgets(buf, BUFLEN-1, stdin);
+        if (s == NULL){
+            break;
+        }
+
+        switch (*s) {
+            case 'I':
+            ret = sscanf(s+1, "%lu", &key);
+            if (ret == 1){
+                pset_insert(ps, key);
+            }
+            break;
+
+            case 'G':
+            ret = sscanf(s+1, "%lu", &key);
+            if (ret == 1){
+                ret = pset_lookup(ps, key);
+                printf("%lu -> %s\n", key, ret ? "true" : "false");
+            }
+            break;
+
+            case 'D':
+            ret = sscanf(s+1, "%lu", &key);
+            if (ret == 1){
+                pset_delete(ps, key);
+            }
+            break;
+
+            case 'S':
+            printf("%lu\n", pset_elements(ps));
+            break;
+
+            case 'P':
+            pset_print(ps);
+            break;
+
+            case '#':
+            break;
+
+            default:
+            help();
+            break;
+
+        }
+        fflush(stdout);
+    }
+
+    phash_free(ps);
+    return 0;
+}
+#endif
+
 // vim:expandtab:tabstop=8:shiftwidth=4:softtabstop=4
