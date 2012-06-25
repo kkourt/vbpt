@@ -39,7 +39,7 @@ node_imba(vbpt_node_t  *node)
 }
 
 
-static char *
+char *
 vbpt_hdr_str(vbpt_hdr_t *hdr)
 {
 	static char buff[128];
@@ -117,7 +117,7 @@ vbpt_node_print(vbpt_node_t *node, int indent, bool verify)
 void
 vbpt_tree_print(vbpt_tree_t *tree, bool verify)
 {
-	printf("=====| tree: %p ver: %p ===================", tree, tree->ver);
+	printf("=====| tree: %p %s ================", tree, ver_str(tree->ver));
 	if (tree->root == NULL)
 		printf("\nroot => %p\n", NULL);
 	else
@@ -280,6 +280,13 @@ vbpt_tree_alloc(ver_t *ver)
 	ret->root = NULL;
 	ret->height = 0;
 	return ret;
+}
+
+vbpt_tree_t *
+vbpt_tree_create(void)
+{
+	ver_t *ver = ver_create();
+	return vbpt_tree_alloc(ver);
 }
 
 /**

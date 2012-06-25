@@ -65,8 +65,10 @@ struct vbpt_tree {
 };
 typedef struct vbpt_tree vbpt_tree_t;
 
-/* root is nodes[0], leaf is nodes[height-1].kvp[slots[height-1]]
- * Path does not hold references of nodes
+/**
+ * root is nodes[0].
+ * Pointed node is nodes[height-1].kvp[slots[height-1]] (might be a leaf)
+ * Path does not hold references on nodes
  */
 struct vbpt_path {
 	vbpt_node_t *nodes[VBPT_MAX_LEVEL];
@@ -81,6 +83,16 @@ void vbpt_tree_print(vbpt_tree_t *tree, bool verify);
 void vbpt_node_print(vbpt_node_t *node, int indent, bool verify);
 void vbpt_leaf_print(vbpt_leaf_t *leaf, int indent);
 void vbpt_path_print(vbpt_path_t *path);
+
+/* ??? functions */
+vbpt_tree_t *vbpt_tree_alloc(ver_t *ver);
+vbpt_leaf_t *vbpt_leaf_alloc(size_t leaf_size, ver_t *ver);
+void vbpt_insert(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o);
+vbpt_tree_t *vbpt_tree_branch(vbpt_tree_t *parent);
+char *vbpt_hdr_str(vbpt_hdr_t *hdr);
+vbpt_tree_t *vbpt_tree_create(void);
+void vbpt_delete(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t **data);
+
 
 static inline vbpt_hdr_t *
 refcnt2hdr(refcnt_t *rcnt)

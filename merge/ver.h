@@ -27,7 +27,7 @@ ver_init(ver_t *ver)
 	#endif
 	refcnt_init(&ver->v_refcnt, 1);
 	#ifndef NDEBUG
-	if (lock_ptr == NULL) {
+	if (lock_ptr == NULL) { // XXX: race
 		spinlock_init(&lock);
 		lock_ptr = &lock;
 	}
@@ -35,6 +35,18 @@ ver_init(ver_t *ver)
 	ver->v_id = id++;
 	spin_unlock(lock_ptr);
 	#endif
+}
+
+static inline char *
+ver_str(ver_t *ver)
+{
+	static char buff[128];
+	#ifndef NDEBUG
+	snprintf(buff, sizeof(buff), " (ver:%3zd ) ", ver->v_id);
+	#else
+	snprintf(buff, sizeof(buff), " (ver:%p ) ", ver);
+	#endif
+	return buff;
 }
 
 static inline ver_t *
