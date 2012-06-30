@@ -274,14 +274,23 @@ phash_new(ul_t minsize_shift)
     return phash_new__(minsize_shift, true);
 }
 
+void
+phash_init(phash_t *phash, ul_t minsize_shift)
+{
+    phash_init__(phash, minsize_shift, true);
+}
+
+void
+phash_tfree(phash_t *phash)
+{
+    REPSTATS(phash);
+    free(phash->kvs);
+}
+
 void phash_free(struct phash *phash)
 {
 
-    REPSTAT(phash->inserts);
-    REPSTAT(phash->deletes);
-    REPSTAT(phash->lookups);
-    REPSTAT(phash->bounces);
-
+    REPSTATS(phash);
     free(phash->kvs);
     free(phash);
 }
@@ -470,21 +479,28 @@ int phash_lookup(struct phash *phash, ul_t key, ul_t *val)
     return ret;
 }
 
+void
+phash_iter_init(phash_t *phash, phash_iter_t *pi)
+{
+    pi->cnt = pi->loc = 0;
+}
+
 int
 phash_iterate__(phash_t *phash, bool vals,
-                ul_t *loc, ul_t *key_ret,  ul_t *idx_ret)
+                phash_iter_t *pi, ul_t *key_ret,  ul_t *idx_ret)
 {
-    ul_t idx = *loc;
+    ul_t idx = pi->loc;
     ul_t size = (ul_t)1<<phash->size_shift;
     INCSTAT(phash->lookups);
     for (;;){
-        if (idx >= size)
+        if (phash->used == pi->cnt || idx >= size)
             return 0;
 
         if (item_valid(phash, idx, vals)){
             *key_ret = phash->kvs[idx];
             *idx_ret = idx++;
-            *loc = idx;
+            pi->loc = idx;
+            pi->cnt++;
             return 1;
         }
 
@@ -492,10 +508,10 @@ phash_iterate__(phash_t *phash, bool vals,
     }
 }
 
-int phash_iterate(struct phash *phash, ul_t *loc, ul_t *key, ul_t *val)
+int phash_iterate(phash_t *phash, phash_iter_t *pi, ul_t *key, ul_t *val)
 {
     ul_t idx;
-    int ret = phash_iterate__(phash, true, loc, key, &idx);
+    int ret = phash_iterate__(phash, true, pi, key, &idx);
     if (ret) {
         ul_t *vals = phash_vals(phash);
         *val = vals[idx];
@@ -505,12 +521,14 @@ int phash_iterate(struct phash *phash, ul_t *loc, ul_t *key, ul_t *val)
 
 void phash_print(phash_t *phash)
 {
-    ul_t i, key, val;
+    ul_t key, val;
+    phash_iter_t pi;
     int ret;
 
+    phash_iter_init(phash, &pi);
     printf("PHASH(%p):\n", phash);
-    for (i=0 ;;){
-        ret = phash_iterate(phash, &i, &key, &val);
+    for (;;){
+        ret = phash_iterate(phash, &pi, &key, &val);
         if (!ret){
             break;
         }
@@ -628,8 +646,9 @@ pset_free(pset_t *pset)
 }
 
 void
-pset_freet(pset_t *pset)
+pset_tfree(pset_t *pset)
 {
+    REPSTATS(pset);
     free(pset->kvs);
 }
 
@@ -709,21 +728,23 @@ bool pset_lookup(pset_t *pset, ul_t key)
     return !!phash_lookup__(pset, key, &idx, false);
 }
 
-int pset_iterate(pset_t *pset, ul_t *loc, ul_t *key)
+int pset_iterate(pset_t *pset, phash_iter_t *pi, ul_t *key)
 {
     ul_t idx;
-    int ret = phash_iterate__(pset, false, loc, key, &idx);
+    int ret = phash_iterate__(pset, false, pi, key, &idx);
     return ret;
 }
 
 void pset_print(pset_t *pset)
 {
-    ul_t i, key;
+    ul_t key;
     int ret;
+    phash_iter_t pi;
 
+    phash_iter_init(pset, &pi);
     printf("PSET(%p):\n", pset);
-    for (i=0 ;;){
-        ret = pset_iterate(pset, &i, &key);
+    for (;;){
+        ret = pset_iterate(pset, &pi, &key);
         if (!ret){
             break;
         }

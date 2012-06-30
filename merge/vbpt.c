@@ -329,7 +329,8 @@ insert_ptr(vbpt_node_t *node, int slot, uint64_t key, vbpt_hdr_t *val)
 {
 	assert(slot < node->items_total);
 	assert(slot <= node->items_nr);
-	assert(node->n_hdr.ver == val->ver);
+	// this assumption is false: merges might add leafs with other versions
+	//assert(node->n_hdr.ver == val->ver);
 
 	vbpt_kvp_t *kvp = node->kvp + slot;
 	if (slot < node->items_nr && kvp->key == key) {
@@ -1320,7 +1321,7 @@ do_insert_test(int rand_seed, uint64_t ins_nr, uint64_t *ins_buff)
 	//vbpt_insert(t, 42, l1, NULL);
 	//vbpt_insert(t, 100, l2, NULL);
 	for (uint64_t i=0; i < ins_nr; i++) {
-		uint64_t k = (rand_seed) ? rand() % 1024 : i;
+		uint64_t k = (rand_seed) ? rand() % 1024UL : i;
 		vbpt_leaf_t *l = vbpt_leaf_alloc(VBPT_LEAF_SIZE, v);
 		printf("INSERTING %lu key=%lu [leaf:%p]\n", i, k, l);
 		if (ins_buff)
@@ -1398,7 +1399,7 @@ do_mv_ins_test(int ins1_seed, int ins2_seed, uint64_t nr1, uint64_t nr2,
 		srand(ins2_seed);
 
 	for (uint64_t i=nr1; i < nr1 + nr2; i++) {
-		uint64_t k = (ins2_seed) ? rand() % 1024 : i;
+		uint64_t k = (ins2_seed) ? rand() % 1024UL : i;
 		vbpt_leaf_t *l = vbpt_leaf_alloc(VBPT_LEAF_SIZE, v);
 		printf("INSERTING %lu key=%lu [leaf:%p]\n", i, k, l);
 		vbpt_insert(t, k, l, NULL);
@@ -1473,7 +1474,8 @@ mv_insdel_test(void)
 		}
 }
 
-int main(int argc, const char *argv[])
+#define UNUSED __attribute__((unused))
+int main(int UNUSED argc, const char UNUSED *argv[])
 {
 
 	#if 0
@@ -1493,6 +1495,8 @@ int main(int argc, const char *argv[])
 	#endif
 
 	#if 0
+	vbpt_tree_t *t0, *t;
+	do_mv_insdel_test(0, 0, 12, 3, &t0, &t);
 	vbpt_gv_reset();
 	vbpt_gv_add_node(t0->root);
 	vbpt_gv_add_node(t->root);

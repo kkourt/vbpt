@@ -1,7 +1,8 @@
 
+#include "ver.h"
 #include "vbpt.h"
 #include "vbpt_cursor.h"
-#include "ver.h"
+#include "vbpt_log.h"
 
 #include "misc.h"
 
@@ -25,7 +26,7 @@
  *  - the empty keyspace between singular ranges in the last level of the tree
  *  - the empty keyspace before the first value in the tree
  * If ->null_max_key is not zero, cursor is currently in a null range
-*/
+ */
 
 void
 vbpt_cur_print(const vbpt_cur_t *cur)
@@ -305,7 +306,125 @@ vbpt_cur_sync(vbpt_cur_t *cur1, vbpt_cur_t *cur2)
 	assert(vbpt_range_eq(&cur1->range, &cur2->range));
 }
 
-int vbpt_merge(vbpt_tree_t *t1, vbpt_tree_t *t2)
+bool
+vbpt_cur_null(vbpt_cur_t *c)
+{
+	return c->null_max_key != 0;
+}
+
+/**
+ * compare two cursors
+ */
+bool
+vbpt_do_cmp(vbpt_cur_t *c1, vbpt_cur_t *c2)
+{
+
+	while (true) {
+		while (!vbpt_cur_null(c1) && c1->range.len != 1)
+			vbpt_cur_down(c1);
+		while (!vbpt_cur_null(c2) && c2->range.len != 1)
+			vbpt_cur_down(c2);
+
+		if (!vbpt_range_eq(&c1->range, &c2->range))
+			return false;
+
+		if (c1->range.len == 1) {
+			assert(c2->range.len == 1);
+			if (vbpt_cur_hdr(c1) != vbpt_cur_hdr(c2))
+				return false;
+		} else {
+			assert(vbpt_cur_null(c1));
+			assert(vbpt_cur_null(c2));
+		}
+
+		vbpt_cur_next(c1);
+		vbpt_cur_next(c2);
+
+		if (vbpt_cur_end(c1)) {
+			if (!vbpt_cur_end(c2))
+				return false;
+			if (!vbpt_range_eq(&c1->range,&c2->range))
+				return false;
+			return true;
+		}
+	}
+}
+
+/**
+ * compare two cursors
+ */
+bool
+vbpt_cmp(vbpt_tree_t *t1, vbpt_tree_t *t2)
+{
+	vbpt_cur_t *c1 = vbpt_cur_alloc(t1);
+	vbpt_cur_t *c2 = vbpt_cur_alloc(t2);
+	bool ret = vbpt_do_cmp(c1, c2);
+	vbpt_cur_free(c1);
+	vbpt_cur_free(c2);
+	return ret;
+}
+
+/**
+ * merge t1 to t2 using logs
+ */
+bool
+vbpt_log_merge(vbpt_txtree_t *t1, vbpt_txtree_t *t2)
+{
+	if (vbpt_log_conflict(t1->tx_log, t2->tx_log)) {
+		printf("%s => CONFLICT\n", __FUNCTION__);
+		return false;
+	}
+	vbpt_log_replay(t1, t2->tx_log);
+	return true;
+}
+
+/**
+ * merge @ptree to @gtree
+ *  @gtree: globally viewable version of the tree
+ *  @ptree: transaction-private version of the tree
+ *
+ * The merging happens  *in-place* in @ptree. If successful, true is returned.
+ * If not, false is returned, and @ptree is invalid.
+ *
+ * Assuming that @gver is the version of @gtree, and @pver is the version of
+ * @ptree: If merge is successful, @pver should become @pver's ancestor (which
+ * is the whole point of doing the merge: to make it appear as if the changes in
+ * @pver happened after @gver). This has some implications (see Note below).
+ *
+ * The merge finds first common ancestor/join point of the two versions @vj. In
+ * the general case the version tree might look like:
+ *
+ *        (vj)             (vj)
+ *       /    \             |
+ *    ...     ...    ==>   ...
+ *    /         \           |
+ * (gver)    (pver)       (gver)
+ *                          |
+ *                         ...
+ *                          |
+ *                        (pver') == (nver)
+ *
+ * Note:
+ * If the versions between vj (common ancestor) and mver have a refcount of 1,
+ * we can just move the path (vj) -- (mver) under (tver). If not all refcounts
+ * in the path are 1, there is a branched vresion somewhere in the path that is
+ * not yet merged and if we move the path the join point might change. OTOH, if
+ * we copy the path, we need to change all the versions in the tree nodes (or
+ * provide some indirection), so that the versioning comparison will work for
+ * future versions.
+ * Hence, we choose to restrict merging so that all refcounts of versions from
+ * @mver to @vj are 1. Note that this translates to requiring that a transaction
+ * commits only after all of its nested transactions have comitted.
+ */
+bool
+vbpt_merge(vbpt_txtree_t *gtree, vbpt_txtree_t *ptree)
+{
+	//ver_t *p = 
+	return 0;
+}
+
+void
+vbpt_sync_test(vbpt_tree_t *t1, vbpt_tree_t *t2)
 {
 	vbpt_cur_t *c1 = vbpt_cur_alloc(t1);
 	vbpt_cur_t *c2 = vbpt_cur_alloc(t2);
@@ -329,7 +448,7 @@ int vbpt_merge(vbpt_tree_t *t1, vbpt_tree_t *t2)
 			printf("     => reached bottom [VAL]\n");
 			vbpt_cur_next(c1);
 			vbpt_cur_next(c2);
-		} else if (c1->null_max_key != 0 || c2->null_max_key != 0) {
+		} else if (vbpt_cur_null(c1) || vbpt_cur_null(c2)) {
 			printf("     => reached bottom [NULL]\n");
 			vbpt_cur_next(c1);
 			vbpt_cur_next(c2);
@@ -343,24 +462,50 @@ int vbpt_merge(vbpt_tree_t *t1, vbpt_tree_t *t2)
 	printf("End State: \n");
 	printf("c1: "); vbpt_cur_print(c1);
 	printf("c2: "); vbpt_cur_print(c2);
-	return 0;
+	vbpt_cur_free(c1);
+	vbpt_cur_free(c2);
 }
 
 #if defined(VBPT_CURSOR_TEST)
+
+static void __attribute__((unused))
+ver_test(void)
+{
+	ver_t *v0 = ver_create();
+	ver_t *v1 = ver_branch(v0);
+	ver_t *v2 = ver_branch(v0);
+	ver_t *v2a = ver_branch(v2);
+	ver_t *x;
+
+	assert(ver_join(v1, v2, &x) == v0 && x == v2);
+	assert(ver_join(v1, v2a, &x) == v0 && x == v2);
+}
 int main(int argc, const char *argv[])
 {
 	vbpt_tree_t *t1 = vbpt_tree_create();
 	vbpt_insert(t1, 42,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
 	vbpt_insert(t1, 100, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
+	//vbpt_insert(t1, 10, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
+	//vbpt_insert(t1, 200, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
+	//vbpt_insert(t1, 300, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
+	//vbpt_insert(t1, 400, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
+	//bpt_insert(t1, 500, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
+	assert(vbpt_cmp(t1, t1) == true);
 
-	vbpt_tree_t *t2 = vbpt_tree_branch(t1);
-	vbpt_insert(t2, 66,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, t2->ver), NULL);
-	vbpt_delete(t2, 42, NULL);
+	vbpt_txtree_t *txt1 = vbpt_txtree_alloc(t1);
+	vbpt_txtree_insert(txt1, 66,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, txt1->tx_tree->ver), NULL);
+	vbpt_txtree_insert(txt1, 99,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, txt1->tx_tree->ver), NULL);
 
-	vbpt_tree_print(t1, true);
-	vbpt_tree_print(t2, true);
+	vbpt_txtree_t *txt2 = vbpt_txtree_alloc(t1);
+	vbpt_txtree_insert(txt2, 11,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, txt2->tx_tree->ver), NULL);
 
-	vbpt_merge(t1, t2);
+	vbpt_log_merge(txt2, txt1);
+
+	//vbpt_tree_print(t1, true);
+	//vbpt_tree_print(t2, true);
+
+
+	//vbpt_sync_test(t1, t2);
 	return 0;
 }
 #endif

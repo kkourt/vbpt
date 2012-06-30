@@ -129,4 +129,76 @@ ver_leq(ver_t *ver1, ver_t *ver2)
 	return false;
 }
 
+
+#define VER_JOIN_FAIL ((ver_t *)(~((uintptr_t)0)))
+#define VER_JOIN_LIMIT 3
+
+/**
+ * see ver_join()
+ *
+ * We can avoid the O(n^2) thing by keeping a hash table for all the versions on
+ * the global path, so that we can iterate the pver path and check membership.
+ */
+static ver_t *
+ver_join_slow(ver_t *gver, ver_t *pver, ver_t **prev_pver)
+{
+	ver_t *gv = gver;
+	for (unsigned gv_i = 0; gv_i < VER_JOIN_LIMIT; gv_i++) {
+		ver_t *pv = pver;
+		for (unsigned pv_i=0 ; pv_i < VER_JOIN_LIMIT; pv_i++) {
+			if (pv->parent == gv->parent) {
+				if (prev_pver)
+					*prev_pver = pv;
+				assert(pv->parent != NULL);
+				return pv->parent;
+			}
+
+			if ((pv = pv->parent) == NULL)
+				break;
+		}
+		if ((gv = gv->parent) == NULL)
+			break;
+	}
+	return VER_JOIN_FAIL;
+}
+
+/**
+ * find the join point (largest common ancestor) of two versions
+ *
+ * The main purpose of this is to find the common ancestor of two versions.
+ * Given our model, however, it gets a bit more complicated than that.
+ * We assume that the join is performed between two versions:
+ *  - @gver: the current version of the object (read-only/globally viewable)
+ *  - @pver: a diverged version, private to the transaction
+ *
+ * The actual join operation (find the common ancestor) is symmetric, but we
+ * neeed to distinguish between the two versions because after we (possibly)
+ * merge the two versions, we need to modify the version tree (see merge
+ * operation), which requires more information than the common ancestor.
+ * Specifically, we need to move @pver under @gver, so we need last node in the
+ * path from @pver to the common ancestor (@prev_v). This node is returned in
+ * @prev_v, if @prev_v is not NULL.
+ *
+ *        (join_v)    <--- return value
+ *       /        \
+ *  (prev_v)      ...
+ *     |           |
+ *    ...        (gver)
+ *     |
+ *   (pver)
+ */
+static inline ver_t *
+ver_join(ver_t *gver, ver_t *pver, ver_t **prev_v)
+{
+	/* this is the most common case, do it first */
+	if (gver->parent == pver->parent) {
+		assert(pver->parent != NULL);
+		if (prev_v)
+			*prev_v = pver;
+		return pver->parent;
+	}
+	return ver_join_slow(gver, pver, prev_v);
+
+}
+
 #endif

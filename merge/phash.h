@@ -73,18 +73,41 @@ phash_vals(phash_t *phash)
 #define REPSTAT(stat)  do { } while (0)
 #endif
 
+#define REPSTATS(x) do {     \
+    REPSTAT(x->inserts); \
+    REPSTAT(x->deletes); \
+    REPSTAT(x->lookups); \
+    REPSTAT(x->bounces); \
+} while (0)
+
+
+
 /**
  * hash functions (dict)
  */
 
 phash_t *phash_new(ul_t minsize_shift);
-void phash_free(phash_t *phash);
+void phash_free(phash_t *phash); // pairs with _new()
+
+void phash_init(phash_t *phash, ul_t minsize_shift);
+void phash_tfree(phash_t *phash); // pairs with _ntfre()
+
 void phash_insert(phash_t *phash, ul_t key, ul_t val);
 int phash_update(phash_t *phash, ul_t key, ul_t val);
 void phash_freql_update(phash_t *phash, ul_t key, ul_t val);
 int phash_delete(struct phash *phash, ul_t key);
 int phash_lookup(phash_t *phash, ul_t key, ul_t *val);
-int phash_iterate(struct phash *phash, ul_t *loc, ul_t *key, ul_t *val);
+
+struct phash_iter {
+    ul_t   loc;  /* location on the array */
+    ul_t   cnt;  /* returned items */
+};
+typedef struct phash_iter phash_iter_t;
+
+/* The iterators are read-only */
+void phash_iter_init(phash_t *phash, phash_iter_t *pi);
+int  phash_iterate(phash_t *phash, phash_iter_t *pi, ul_t *key, ul_t *val);
+
 void phash_print(phash_t *phash);
 
 /**
@@ -109,13 +132,21 @@ pset_t *pset_new(ul_t minsize_shift); // returns an initialized pset
 void pset_free(pset_t *pset); // goes with _new()
 
 void pset_init(pset_t *pset, ul_t minsize_shift);
-void pset_freet(pset_t *pset); // goes with _init()
+void pset_tfree(pset_t *pset); // goes with _init()
 
 void pset_insert(pset_t *pset, ul_t key);
 int pset_delete(pset_t *pset, ul_t key);
 bool pset_lookup(pset_t *pset, ul_t key);
-int pset_iterate(pset_t *pset, ul_t *idx, ul_t *key);
+int pset_iterate(pset_t *pset, phash_iter_t *pi, ul_t *key);
 void pset_print(pset_t *pset);
+
+typedef phash_iter_t pset_iter_t;
+
+static inline void
+pset_iter_init(pset_t *pset, pset_iter_t *pi)
+{
+    phash_iter_init(pset, pi);
+}
 
 #endif
 

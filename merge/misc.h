@@ -29,4 +29,8 @@
 	}                          \
 	ret_;})
 
-#endif
+
+#define DIV_ROUNDUP(n,d) (((n) + (d) - 1) / (d))
+
+
+#endif /* MISC_H__ */
