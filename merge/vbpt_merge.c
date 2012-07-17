@@ -1,12 +1,15 @@
 
 #include "ver.h"
 #include "vbpt.h"
-#include "vbpt_cursor.h"
+#include "vbpt_merge.h"
 #include "vbpt_log.h"
 
 #include "misc.h"
 
 #define VBPT_KEY_MAX UINT64_MAX
+
+// forward declaration
+static inline void vbpt_cur_maybe_delete(vbpt_cur_t *c);
 
 /**
  * Cursors:
@@ -46,8 +49,7 @@ vbpt_cur_hdr(vbpt_cur_t *cur)
 	vbpt_path_t *path = &cur->path;
 	if (path->height == 0)
 		return cur->tree->root ? &cur->tree->root->n_hdr : NULL;
-
-
+;
 	vbpt_node_t *pnode = path->nodes[path->height - 1];
 	uint16_t pslot = path->slots[path->height - 1];
 	assert(pslot < pnode->items_nr);
@@ -67,6 +69,7 @@ vbpt_cur_alloc(vbpt_tree_t *tree)
 	ret->path.height = 0;
 	ret->range = vbpt_range_full;
 	ret->null_max_key = 0;
+	ret->flags.deleteme = 0;
 	return ret;
 }
 
@@ -87,11 +90,18 @@ vbpt_cur_free(vbpt_cur_t *cur)
  *  before the last node's version or not.
  */
 ver_t *
-vbpt_cur_ver(vbpt_cur_t *cur)
+vbpt_cur_ver(const vbpt_cur_t *cur)
 {
-	vbpt_path_t *path = &cur->path;
-	vbpt_tree_t *tree = cur->tree;
-	return path->height == 0 ? tree->ver : vbpt_cur_hdr(cur)->ver;
+	const vbpt_path_t *path = &cur->path;
+	const vbpt_tree_t *tree = cur->tree;
+	if (path->height == 0) {
+		return tree->ver;
+	} else if (cur->null_max_key == 0) {
+		return vbpt_cur_hdr((vbpt_cur_t *)cur)->ver;
+	} else {
+		vbpt_node_t *pnode = path->nodes[path->height -1];
+		return pnode->n_hdr.ver;
+	}
 }
 
 /**
@@ -168,6 +178,7 @@ vbpt_cur_next_leaf(vbpt_cur_t *cur)
 	assert(vbpt_cur_hdr(cur)->type == VBPT_LEAF);
 
 	if (cur->null_max_key != 0) {
+		assert(!cur->flags.deleteme);
 		// cursor pointing to NULL already:
 		uint64_t r_last = cur->range.key + cur->range.len - 1;
 		assert(r_last <= cur->null_max_key);
@@ -198,6 +209,7 @@ vbpt_cur_next_leaf(vbpt_cur_t *cur)
 		assert(cur->range.len == 1);
 		assert(cur->range.key == n->kvp[nslot].key);
 		uint64_t next_key = n->kvp[nslot+1].key;
+		vbpt_cur_maybe_delete(cur);
 		if (next_key == cur->range.key + 1) {
 			// if the current and next key are sequential, we can
 			// just move to the next key
@@ -251,6 +263,7 @@ vbpt_cur_next(vbpt_cur_t *cur)
 		vbpt_node_t *n = path->nodes[path->height -1];
 		uint16_t nslot = path->slots[path->height -1];
 		assert(nslot < n->items_nr);
+		vbpt_cur_maybe_delete(cur);
 		if (nslot + 1 < n->items_nr) {
 			path->slots[path->height -1] = nslot + 1;
 			uint64_t old_high_k = n->kvp[nslot].key;
@@ -269,6 +282,7 @@ vbpt_cur_next(vbpt_cur_t *cur)
 
 	return 0;
 }
+
 /**
  * check if cursor has reached the end of the tree
  */
@@ -285,6 +299,7 @@ vbpt_cur_end(vbpt_cur_t *cur)
 void
 vbpt_cur_sync(vbpt_cur_t *cur1, vbpt_cur_t *cur2)
 {
+	assert(!cur1->flags.deleteme && !cur2->flags.deleteme);
 	assert(cur1->range.key == cur2->range.key);
 	while (!vbpt_range_eq(&cur1->range, &cur2->range)) {
 		// order the ranges (s: small, b: big)
@@ -306,17 +321,11 @@ vbpt_cur_sync(vbpt_cur_t *cur1, vbpt_cur_t *cur2)
 	assert(vbpt_range_eq(&cur1->range, &cur2->range));
 }
 
-bool
-vbpt_cur_null(vbpt_cur_t *c)
-{
-	return c->null_max_key != 0;
-}
-
 /**
  * compare two cursors
  */
 bool
-vbpt_do_cmp(vbpt_cur_t *c1, vbpt_cur_t *c2)
+vbpt_cur_cmp(vbpt_cur_t *c1, vbpt_cur_t *c2, bool check_leafs)
 {
 
 	while (true) {
@@ -330,7 +339,7 @@ vbpt_do_cmp(vbpt_cur_t *c1, vbpt_cur_t *c2)
 
 		if (c1->range.len == 1) {
 			assert(c2->range.len == 1);
-			if (vbpt_cur_hdr(c1) != vbpt_cur_hdr(c2))
+			if (check_leafs && vbpt_cur_hdr(c1) != vbpt_cur_hdr(c2))
 				return false;
 		} else {
 			assert(vbpt_cur_null(c1));
@@ -343,11 +352,123 @@ vbpt_do_cmp(vbpt_cur_t *c1, vbpt_cur_t *c2)
 		if (vbpt_cur_end(c1)) {
 			if (!vbpt_cur_end(c2))
 				return false;
-			if (!vbpt_range_eq(&c1->range,&c2->range))
+			if (!vbpt_range_eq(&c1->range, &c2->range))
 				return false;
 			return true;
 		}
 	}
+}
+
+/**
+ * mark the pointed node for deletion
+ *  returns false if (for whatever reason) we are not able to delete node
+ *  the node will be deleted in the subsequent vbpt_cur_next() call
+ *  no cursor call are allowed, when a node is marked for deletion
+ *  -- the caller should make sure that next() is called first.
+ *
+ * (note that the interface allows to mark something for deletion, and do it
+ *  afterwards, as long as we are sure that we will be able to delete it)
+ */
+bool
+vbpt_cur_mark_delete(vbpt_cur_t *c)
+{
+	assert(!vbpt_cur_null(c));
+	vbpt_path_t *path = &c->path;
+	vbpt_node_t *pnode = path->nodes[path->height -1];
+
+	// if this is the last element, re-balancing is required.
+	// Avoid this complex case (at least for now)
+	if (pnode->items_nr == 1)
+		return false;
+
+	c->flags.deleteme = 1;
+	return true;
+}
+
+/**
+ *  if a node is marked for deletion, delete it
+ */
+static inline void
+vbpt_cur_maybe_delete(vbpt_cur_t *cur)
+{
+	if (cur->flags.deleteme) {
+		vbpt_delete_ptr(cur->tree, &cur->path, NULL);
+		cur->flags.deleteme = 0;
+	}
+}
+
+static uint16_t
+vbpt_cur_height(const vbpt_cur_t *cur)
+{
+	assert(cur->tree->height >= cur->path.height);
+	return cur->tree->height - cur->path.height;
+}
+
+/**
+ * try to replace node pointed by @pc with node pointed by @gc, knowing that @gc
+ * does not point to null
+ *   if unsuccessful, return false
+ *
+ * old values that are replaced are decrefed
+ */
+static bool
+vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
+{
+	assert(!vbpt_cur_null(gc));
+	uint16_t p_height = vbpt_cur_height(pc);
+	uint16_t g_height = vbpt_cur_height(gc);
+
+	if (g_height > p_height) {
+		printf("g_height > p_height: bailing out\n");
+		return false; // TODO
+	}
+
+	uint16_t     p_key = pc->range.key + pc->range.len -1;
+	vbpt_node_t *p_pnode = pc->path.nodes[pc->path.height - 1];
+	uint16_t     p_pslot = pc->path.slots[pc->path.height - 1];
+	vbpt_hdr_t  *p_hdr = NULL;
+	if (vbpt_cur_null(pc)) {
+		assert(p_pnode->items_nr <= p_pnode->items_total);
+		if (p_pnode->items_nr == p_pnode->items_total) {
+			printf("pc points to NULL and no room in node\n");
+			return false;
+		}
+		// slot should be OK
+	} else {
+		p_hdr = vbpt_cur_hdr(pc);
+	}
+
+
+	vbpt_hdr_t  *g_hdr = vbpt_cur_hdr((vbpt_cur_t *)gc);
+	vbpt_hdr_t *new_hdr = vbpt_hdr_getref(g_hdr);
+	if (p_height > g_height) { // add a sufficiently large chain of nodes
+		uint16_t levels = p_height - g_height;
+		new_hdr = &(vbpt_node_chain(pc->tree, levels, p_key, new_hdr)->n_hdr);
+	}
+
+	vbpt_hdr_t *old_hdr = vbpt_insert_ptr(p_pnode, p_pslot, p_key, new_hdr);
+	assert(old_hdr == p_hdr);
+	if (p_hdr) {
+		vbpt_hdr_putref(p_hdr);
+	} else {
+		assert(pc->null_max_key != 0);
+		pc->null_max_key = 0;
+	}
+
+	return true;
+}
+
+/**
+ * try to replace node pointed by @pc with node pointed by @gc
+ *   if unsuccessful, return false
+ */
+bool
+vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
+{
+	if (vbpt_cur_null(gc)) {
+		return (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc));
+	}
+	return vbpt_cur_do_replace(pc, gc);
 }
 
 /**
@@ -358,28 +479,150 @@ vbpt_cmp(vbpt_tree_t *t1, vbpt_tree_t *t2)
 {
 	vbpt_cur_t *c1 = vbpt_cur_alloc(t1);
 	vbpt_cur_t *c2 = vbpt_cur_alloc(t2);
-	bool ret = vbpt_do_cmp(c1, c2);
+	bool ret = vbpt_cur_cmp(c1, c2, false);
 	vbpt_cur_free(c1);
 	vbpt_cur_free(c2);
 	return ret;
 }
 
 /**
- * merge t1 to t2 using logs
+ * merge @ptree with @gtree -> result in @ptree
  */
 bool
-vbpt_log_merge(vbpt_txtree_t *t1, vbpt_txtree_t *t2)
+vbpt_log_merge(vbpt_txtree_t *gtree, vbpt_txtree_t *ptree)
 {
-	if (vbpt_log_conflict(t1->tx_log, t2->tx_log)) {
+	if (vbpt_log_conflict(gtree->tx_log, ptree->tx_log)) {
 		printf("%s => CONFLICT\n", __FUNCTION__);
 		return false;
 	}
-	vbpt_log_replay(t1, t2->tx_log);
+	vbpt_log_replay(ptree, gtree->tx_log);
 	return true;
 }
 
+
 /**
- * merge @ptree to @gtree
+ * helper function for merging when cursors are at the same range
+ *  see vbpt_merge() for more details
+ *
+ * returns:
+ *  -1 : if a conflict was detected
+ *   0 : if more information is needed -- cursors need to move down
+ *   1 : if merge was successful
+ *
+ *      |-            (jv)       -|
+ *      |            /   \      p_dist
+ *   g_dist         /     \       |
+ *      |          /     (pv)    -|
+ *      |-       (gv)
+ */
+static inline int
+do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
+        const vbpt_txtree_t *gtree, vbpt_txtree_t *ptree,
+        ver_t *gv, ver_t  *pv, uint16_t g_dist, uint16_t p_dist, ver_t *jv)
+{
+	assert(vbpt_range_eq(&gc->range, &pc->range));
+	ver_t *gc_v = vbpt_cur_ver(gc);
+	ver_t *pc_v = vbpt_cur_ver(pc);
+	//dmsg("range: %4lu,+%3lu\n\tgc_v:%s\n\tpc_v:%s\n",
+	//      gc->range.key, gc->range.len, ver_str(gc_v), ver_str(pc_v));
+	vbpt_log_t *plog = ptree->tx_log;
+	vbpt_range_t *range = &pc->range;
+
+	/*
+         * (gc_v)------>|
+         *              |
+	 *             (jv)
+	 *            /   \
+	 *           /     \
+	 *          /     (pv)
+	 *        (gv)
+	 */
+	if (ver_leq_limit(gc_v, jv, g_dist)) {
+		//printf("NO CHANGES in gc_v\n");
+		return 1;
+	}
+
+	/*
+         *              |<-----(pc_v)
+         *              |
+	 *             (jv)
+	 *            /   \
+	 *  (gc_v)-->/     \
+	 *          /     (pv)
+	 *        (gv)
+	 */
+	if (ver_leq_limit(pc_v, jv, p_dist)) {
+		//printf("Only gc_v changed\n");
+		// check if private tree read something that is under the
+		// current (changed in the global tree) range. If it did,
+		// it would read an older value, so we need to abort.
+		if (vbpt_log_rs_range_exists(plog, range))
+			return -1;
+		// we need to effectively replace the node pointed by @pv with
+		// the node pointed by @gc
+		return vbpt_cur_replace(pc, gc) ? 1: -1;
+	}
+
+	/*
+         *              |
+	 *             (jv)
+	 *            /   \<----(pc_v)
+	 *  (gc_v)-->/     \
+	 *          /     (pv)
+	 *        (gv)
+	 */
+	 //printf("Both changed\n");
+
+	// Handle NULL cases: NULL cases are special because we lack information
+	// to precisely check for conflicts. For example, we can't go deeper --
+	// all information on the tree is lost. It might be a good idea to make
+	// (more) formal arguments about the correctness of the cases below
+	if (vbpt_cur_null(pc) && vbpt_cur_null(gc)) {
+		//printf("Both are NULL\n");
+		// if both cursors point to NULL, there is a conflict if @gv has
+		// read an item from the previous state, which may not have been
+		// NULL.
+		// NOTE: we could also check whether @glog contains a delete to
+		// that range. However, for now we just use @plog for the merge,
+		// which would be convenient for the distributed case
+		return vbpt_log_rs_range_exists(plog, range) ? -1:1;
+	} else if (vbpt_cur_null(pc)) {
+		//printf("pc is NULL\n");
+		// @pc points to NULL, but @gc does not. If @pv did not read or
+		// delete anything in that range, we can replace @pc with @gc.
+		if (vbpt_log_rs_range_exists(plog, range))
+			return -1;
+		if (vbpt_log_ds_range_exists(plog, range))
+			return -1;
+		//printf("trying to replace pc with gc\n");
+		return vbpt_cur_replace(pc, gc) ? 1: -1;
+	} else if (vbpt_cur_null(gc)) {
+		//printf("gc is NULL\n");
+		// @gc points  to NULL, but @pc does not. We can't just check
+		// against the readset of @plog and keep the NULL: If @gc
+		// deleted a key, that @pc still has due to COW (not because it
+		// inserted it) we need to delete it.
+
+		// special case: this is a leaf that we now has changed after
+		// @vj -- we just keep it similarly to leaf checks
+		if (range->len == 1 && !vbpt_log_rs_key_exists(plog, range->key))
+			return 1;
+
+		return -1;
+	}
+
+	assert(!vbpt_cur_null(gc) && !vbpt_cur_null(pc));
+	if (range->len == 1) {
+		return vbpt_log_rs_key_exists(plog, range->key) ? -1:1;
+	}
+
+	/* we need to go deeper */
+	return 0;
+}
+
+
+/**
+ * merge @ptree with @gtree -> result in @ptree
  *  @gtree: globally viewable version of the tree
  *  @ptree: transaction-private version of the tree
  *
@@ -394,15 +637,17 @@ vbpt_log_merge(vbpt_txtree_t *t1, vbpt_txtree_t *t2)
  * The merge finds first common ancestor/join point of the two versions @vj. In
  * the general case the version tree might look like:
  *
- *        (vj)             (vj)
- *       /    \             |
- *    ...     ...    ==>   ...
- *    /         \           |
- * (gver)    (pver)       (gver)
- *                          |
- *                         ...
- *                          |
- *                        (pver') == (nver)
+ *        (vj)                  (vj)
+ *       /    \                  |
+ *     ...  (hpver)             ...
+ *     /        \     ==>        |
+ *  (gver)      ...            (gver)
+ *                \              |
+ *               (pver)        (hpver)
+ *                               |
+ *                              ...
+ *                               |
+ *                            (pver') == (nver)
  *
  * Note:
  * If the versions between vj (common ancestor) and mver have a refcount of 1,
@@ -417,10 +662,45 @@ vbpt_log_merge(vbpt_txtree_t *t1, vbpt_txtree_t *t2)
  * commits only after all of its nested transactions have comitted.
  */
 bool
-vbpt_merge(vbpt_txtree_t *gtree, vbpt_txtree_t *ptree)
+vbpt_merge(const vbpt_txtree_t *gtree, vbpt_txtree_t *ptree)
 {
-	//ver_t *p = 
-	return 0;
+	vbpt_tree_t *gt = gtree->tx_tree;
+	vbpt_tree_t *pt = ptree->tx_tree;
+	//dmsg(""); vbpt_tree_print(gt, true);
+	//dmsg(""); vbpt_tree_print(pt, true);
+
+	vbpt_cur_t *gc = vbpt_cur_alloc(gt);
+	vbpt_cur_t *pc = vbpt_cur_alloc(pt);
+
+	uint16_t g_dist, p_dist;
+	ver_t *hpver;
+	ver_t *gver = gt->ver;
+	ver_t *pver = pt->ver;
+	ver_t *vj = ver_join(gver, pver, &hpver, &g_dist, &p_dist);
+	//printf("VERSIONS: gver:%s  pver:%s  vj:%s\n", ver_str(gver), ver_str(pver), ver_str(vj));
+
+	bool merge_ok = true;
+	while (!vbpt_cur_end(gc) && !vbpt_cur_end(pc)) {
+		vbpt_cur_sync(gc, pc);
+		int ret = do_merge(gc, pc, gtree, ptree, gver, pver, g_dist, p_dist, vj);
+		if (ret == -1) {
+			merge_ok = false;
+			goto end;
+		} else if (ret == 0) {
+			vbpt_cur_down(gc);
+			vbpt_cur_down(pc);
+		} else if (ret == 1) {
+			vbpt_cur_next(gc);
+			vbpt_cur_next(pc);
+		} else assert(false && "This should never happen");
+	}
+	/* success: fix version tree */
+	assert(!ver_chain_has_branch(pver, hpver));
+	ver_setparent(hpver, gver);
+end:
+	vbpt_cur_free(gc);
+	vbpt_cur_free(pc);
+	return merge_ok;
 }
 
 void
@@ -466,8 +746,9 @@ vbpt_sync_test(vbpt_tree_t *t1, vbpt_tree_t *t2)
 	vbpt_cur_free(c2);
 }
 
-#if defined(VBPT_CURSOR_TEST)
+#if defined(VBPT_MERGE_TEST)
 
+#if 0
 static void __attribute__((unused))
 ver_test(void)
 {
@@ -480,32 +761,39 @@ ver_test(void)
 	assert(ver_join(v1, v2, &x) == v0 && x == v2);
 	assert(ver_join(v1, v2a, &x) == v0 && x == v2);
 }
+#endif
+
 int main(int argc, const char *argv[])
 {
 	vbpt_tree_t *t1 = vbpt_tree_create();
 	vbpt_insert(t1, 42,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
 	vbpt_insert(t1, 100, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
-	//vbpt_insert(t1, 10, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
-	//vbpt_insert(t1, 200, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
-	//vbpt_insert(t1, 300, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
-	//vbpt_insert(t1, 400, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
-	//bpt_insert(t1, 500, vbpt_leaf_alloc(VBPT_LEAF_SIZE, t1->ver), NULL);
 	assert(vbpt_cmp(t1, t1) == true);
 
 	vbpt_txtree_t *txt1 = vbpt_txtree_alloc(t1);
 	vbpt_txtree_insert(txt1, 66,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, txt1->tx_tree->ver), NULL);
 	vbpt_txtree_insert(txt1, 99,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, txt1->tx_tree->ver), NULL);
+	vbpt_log_finalize(txt1->tx_log);
 
-	vbpt_txtree_t *txt2 = vbpt_txtree_alloc(t1);
-	vbpt_txtree_insert(txt2, 11,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, txt2->tx_tree->ver), NULL);
+	vbpt_txtree_t *txt2_a = vbpt_txtree_alloc(t1);
+	vbpt_txtree_insert(txt2_a, 11,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, txt2_a->tx_tree->ver), NULL);
 
-	vbpt_log_merge(txt2, txt1);
+	vbpt_txtree_t *txt2_b = vbpt_txtree_alloc(t1);
+	vbpt_txtree_insert(txt2_b, 11,  vbpt_leaf_alloc(VBPT_LEAF_SIZE, txt2_b->tx_tree->ver), NULL);
 
-	//vbpt_tree_print(t1, true);
-	//vbpt_tree_print(t2, true);
+	printf("MERGE:\n");
+	if (vbpt_log_merge(txt1, txt2_b)) {
+		printf("vbpt_log_merge(): SUCCESS\n");
+	} else printf("FAILED\n");
 
 
-	//vbpt_sync_test(t1, t2);
+	if (vbpt_merge(txt1, txt2_a)) {
+		printf("vbpt_merge():     SUCCESS\n");
+	} else printf("FAILED\n");
+
+	vbpt_tree_print(txt2_a->tx_tree, true);
+	vbpt_tree_print(txt2_b->tx_tree, true);
+	printf("CMP=%u\n", vbpt_cmp(txt2_a->tx_tree, txt2_b->tx_tree));
 	return 0;
 }
 #endif

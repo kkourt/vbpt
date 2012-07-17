@@ -630,55 +630,62 @@ int main(int argc, char **argv)
 pset_t *
 pset_new(ul_t minsize_shift)
 {
-    return phash_new__(minsize_shift, false);
+    pset_t *pset;
+    pset = malloc(sizeof(pset_t));
+    if (!pset) {
+        perror("malloc");
+        exit(1);
+    }
+    phash_init__(&pset->ph_, minsize_shift, false);
+    return pset;
 }
 
 void
 pset_init(pset_t *pset, ul_t minsize_shift)
 {
-    phash_init__(pset, minsize_shift, false);
+    phash_init__(&pset->ph_, minsize_shift, false);
 }
 
 void
 pset_free(pset_t *pset)
 {
-    phash_free(pset);
+    phash_tfree(&pset->ph_);
+    free(pset);
 }
 
 void
 pset_tfree(pset_t *pset)
 {
-    REPSTATS(pset);
-    free(pset->kvs);
+    phash_tfree(&pset->ph_);
 }
 
 void
 pset_resize(pset_t *pset, ul_t new_size_shift)
 {
     pset_t  old;
-    phash_cp(&old, pset);
+    phash_cp(&(old.ph_), &pset->ph_);
 
-    phash_resize__(pset, new_size_shift, false);
+    phash_resize__(&pset->ph_, new_size_shift, false);
     for (ul_t i = 0; i < pset_size(&old); i++) {
-        if (item_valid(&old, i, false)){
+        if (item_valid(&(old.ph_), i, false)){
             //fprintf(stderr, "rs: inserting (%lu,%lu)\n", item->k, item->v);
-            pset_insert(pset, old.kvs[i]);
+            pset_insert(pset, old.ph_.kvs[i]);
         }
     }
-    free(old.kvs);
+    free(old.ph_.kvs);
 }
 
 void
 pset_grow(pset_t *pset)
 {
-    ul_t new_size_shift = grow_size_shift(pset);
+    ul_t new_size_shift = grow_size_shift(&pset->ph_);
     pset_resize(pset, new_size_shift);
 }
 
 static inline void
 pset_grow_check(pset_t *pset)
 {
-    if (grow_check(pset))
+    if (grow_check(&pset->ph_))
         pset_grow(pset);
 }
 
@@ -692,11 +699,12 @@ void static inline pset_upd_set(phash_t *p, ul_t idx, ul_t key)
 
 void pset_insert(pset_t *pset, ul_t key)
 {
+    phash_t *ph = &pset->ph_;
     assert_key(key);
     pset_grow_check(pset);
     #define PHUPD_UPDATE__(_p, _i, _k, _v) do { } while (0)
     #define PHUPD_SET__(_p, _i, _k, _v) pset_upd_set(_p, _i, _k)
-    PHASH_UPDATE(pset, key, 0xdeadbabe, false)
+    PHASH_UPDATE(ph, key, 0xdeadbabe, false)
     #undef PHUPD_UPDATE__
     #undef PHUPD_SET__
 }
@@ -704,34 +712,34 @@ void pset_insert(pset_t *pset, ul_t key)
 void
 pset_shrink(pset_t *pset)
 {
-    ul_t new_size_shift = shrink_size_shift(pset);
+    ul_t new_size_shift = shrink_size_shift(&pset->ph_);
     pset_resize(pset, new_size_shift);
 }
 
 int pset_delete(pset_t *pset, ul_t key)
 {
-    if (pset->used == 0)
+    if (pset->ph_.used == 0)
         return false;
 
     assert_key(key);
-    ul_t size_shift = pset->size_shift;
+    ul_t size_shift = pset->ph_.size_shift;
     ul_t size = (ul_t)1<<size_shift;
-    ul_t u = pset->used;
+    ul_t u = pset->ph_.used;
     if (4*u < size)
         pset_shrink(pset);
-    return phash_delete__(pset, key, false);
+    return phash_delete__(&pset->ph_, key, false);
 }
 
 bool pset_lookup(pset_t *pset, ul_t key)
 {
     ul_t idx;
-    return !!phash_lookup__(pset, key, &idx, false);
+    return !!phash_lookup__(&pset->ph_, key, &idx, false);
 }
 
 int pset_iterate(pset_t *pset, phash_iter_t *pi, ul_t *key)
 {
     ul_t idx;
-    int ret = phash_iterate__(pset, false, pi, key, &idx);
+    int ret = phash_iterate__(&pset->ph_, false, pi, key, &idx);
     return ret;
 }
 
@@ -739,9 +747,9 @@ void pset_print(pset_t *pset)
 {
     ul_t key;
     int ret;
-    phash_iter_t pi;
+    pset_iter_t pi;
 
-    phash_iter_init(pset, &pi);
+    pset_iter_init(pset, &pi);
     printf("PSET(%p):\n", pset);
     for (;;){
         ret = pset_iterate(pset, &pi, &key);

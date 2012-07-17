@@ -27,14 +27,43 @@ refcnt_init(refcnt_t *rcnt, uint32_t cnt)
 	rcnt->cnt = cnt;
 }
 
-static inline void
-refcnt_inc(refcnt_t *rcnt)
+static inline uint32_t
+refcnt_get(refcnt_t *rcnt)
 {
-	assert(rcnt->cnt > 0);
+	uint32_t ret;
+	spin_lock(&rcnt->lock);
+	ret = rcnt->cnt;
+	spin_unlock(&rcnt->lock);
+	return ret;
+}
+
+/*
+ * refcnt_{inc,dec}__ just perform the atomic operations
+ */
+
+static inline void
+refcnt_inc__(refcnt_t *rcnt)
+{
 	spin_lock(&rcnt->lock);
 	rcnt->cnt++;
 	spin_unlock(&rcnt->lock);
 }
+
+static inline void
+refcnt_dec__(refcnt_t *rcnt)
+{
+	spin_lock(&rcnt->lock);
+	rcnt->cnt--;
+	spin_unlock(&rcnt->lock);
+}
+
+static inline void
+refcnt_inc(refcnt_t *rcnt)
+{
+	assert(rcnt->cnt > 0);
+	refcnt_inc__(rcnt);
+}
+
 
 static inline int
 refcnt_dec(refcnt_t *rcnt, void  (*release)(refcnt_t *))

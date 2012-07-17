@@ -84,7 +84,7 @@ void vbpt_node_print(vbpt_node_t *node, int indent, bool verify);
 void vbpt_leaf_print(vbpt_leaf_t *leaf, int indent);
 void vbpt_path_print(vbpt_path_t *path);
 
-/* ??? functions */
+/* public interface */
 vbpt_tree_t *vbpt_tree_alloc(ver_t *ver);
 vbpt_leaf_t *vbpt_leaf_alloc(size_t leaf_size, ver_t *ver);
 void vbpt_insert(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o);
@@ -93,6 +93,15 @@ char *vbpt_hdr_str(vbpt_hdr_t *hdr);
 vbpt_tree_t *vbpt_tree_create(void);
 void vbpt_delete(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t **data);
 
+/* low-level interface */
+
+void vbpt_delete_ptr(vbpt_tree_t *tree, vbpt_path_t *path,
+                     vbpt_hdr_t **hdr_ptr);
+vbpt_hdr_t *vbpt_insert_ptr(vbpt_node_t *node,
+                            uint16_t slot, uint64_t key,
+			    vbpt_hdr_t *val);
+vbpt_node_t *vbpt_node_chain(vbpt_tree_t *tree, uint16_t levels, uint64_t key,
+                             vbpt_hdr_t *last_hdr);
 
 static inline vbpt_hdr_t *
 refcnt2hdr(refcnt_t *rcnt)

@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include "vbpt.h" /* vbpt_leaf_t */
 
+#include "vbpt_merge.h" // vbpt_range_t
+
 // interface
 
 struct vbpt_log;
@@ -15,14 +17,29 @@ typedef struct vbpt_log vbpt_log_t;
 
 vbpt_log_t *vbpt_log_alloc(void);
 
+// record operations on the tree
 void vbpt_log_write(vbpt_log_t *log, uint64_t key, vbpt_leaf_t *leaf);
 void vbpt_log_read(vbpt_log_t *log, uint64_t key);
+void vbpt_log_delete(vbpt_log_t *log, uint64_t key);
 
+// finalize the log -- only queries can be performed after that
 void vbpt_log_finalize(vbpt_log_t *log);
 
+// query the log:
+//  to allow for different implementations for the logs, we specify that query
+//  functions can return false positives (e.g., so that they can be implemented
+//  with bloom filters) but not false negatives. In that sense, a check function
+//  that always returns true is correct.
+
 // read set (rs) checks
-bool vbpt_log_rs_check_key(vbpt_log_t *log, uint64_t key);
-bool vbpt_log_rs_check_range(vbpt_log_t *log, uint64_t key0, uint64_t len);
+bool vbpt_log_rs_key_exists(vbpt_log_t *log, uint64_t key);
+bool vbpt_log_rs_range_exists(vbpt_log_t *log, vbpt_range_t *r);
+// write set (ws) checks
+bool vbpt_log_ws_key_exists(vbpt_log_t *log, uint64_t key);
+bool vbpt_log_ws_range_exists(vbpt_log_t *log, vbpt_range_t *r);
+// delete set (ds) checks
+bool vbpt_log_ds_key_exists(vbpt_log_t *log, uint64_t key);
+bool vbpt_log_ds_range_exists(vbpt_log_t *log, vbpt_range_t *r);
 
 void vbpt_log_dealloc(vbpt_log_t *log);
 
@@ -87,22 +104,28 @@ enum {
 	VBPT_LOG_FINALIZED,
 };
 
+/**
+ * vbpt_log: log for changes in an object
+ *  @parent for merging logs together
+ */
 struct vbpt_log {
 	unsigned state;
 	pset_t   rd_set;
+	pset_t   rm_set;
 	phash_t  wr_set;
+	struct vbpt_log *parent;
 };
 
 static inline size_t
 vbpt_log_rd_size(vbpt_log_t *log)
 {
-	return log->rd_set.used;
+	return pset_elements(&log->rd_set);
 }
 
 static inline size_t
 vbpt_log_wr_size(vbpt_log_t *log)
 {
-	return log->wr_set.used;
+	return phash_elements(&log->wr_set);
 }
 
 #endif

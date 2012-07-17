@@ -113,19 +113,21 @@ void phash_print(phash_t *phash);
 /**
  * set funtions
  */
-
-typedef phash_t pset_t;
+struct pset {
+    phash_t ph_;
+};
+typedef struct pset pset_t;
 
 static inline ul_t
 pset_elements(pset_t *pset)
 {
-    return pset->used;
+    return pset->ph_.used;
 }
 
 static inline ul_t
 pset_size(pset_t *pset)
 {
-    return 1UL<<(pset->size_shift);
+    return 1UL<<(pset->ph_.size_shift);
 }
 
 pset_t *pset_new(ul_t minsize_shift); // returns an initialized pset
@@ -145,7 +147,7 @@ typedef phash_iter_t pset_iter_t;
 static inline void
 pset_iter_init(pset_t *pset, pset_iter_t *pi)
 {
-    phash_iter_init(pset, pi);
+    phash_iter_init(&pset->ph_, pi);
 }
 
 #endif

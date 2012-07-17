@@ -1,5 +1,5 @@
-#ifndef VBPT_CURSOR_H
-#define VBPT_CURSOR_H
+#ifndef VBPT_MERGE_H
+#define VBPT_MERGE_H
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -17,7 +17,7 @@ typedef struct vbpt_range vbpt_range_t;
 vbpt_cur_t *vbpt_cur_alloc(vbpt_tree_t *);
 void vbpt_cur_free(vbpt_cur_t *);
 
-ver_t *vbpt_cur_ver(vbpt_cur_t *);
+ver_t *vbpt_cur_ver(const vbpt_cur_t *);
 
 void vbpt_cur_down(vbpt_cur_t *);
 void vbpt_cur_downrange(vbpt_cur_t *, const vbpt_cur_t *);
@@ -26,6 +26,9 @@ int vbpt_cur_next(vbpt_cur_t *);
 bool vbpt_cur_end(vbpt_cur_t *);
 
 void vbpt_cur_sync(vbpt_cur_t *cur1, vbpt_cur_t *cur2);
+static inline bool vbpt_cur_null(const vbpt_cur_t *c);
+
+bool vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc);
 
 /**
  * Implementation
@@ -42,17 +45,23 @@ struct vbpt_range {
  * Cursor:
  *  We keep an explicit range, because the nodes in the path might not contain
  *  enough information about the current range (e.g., in cases where no nodes
- *  exist). Note that @range is the range of the node pointed to.
+ *  exist). Note that @range is the range of the node that the cursor points to.
  */
 struct vbpt_cur {
 	vbpt_tree_t  *tree;
 	vbpt_path_t  path;
 	vbpt_range_t range;
 	uint64_t     null_max_key;
+	struct {
+		uint8_t deleteme:1;
+	}            flags;
 };
-//typedef struct vbpt_cur vbpt_cur_t;
 
-//typedef struct vbpt_range vbpt_range_t;
+static inline bool
+vbpt_cur_null(const vbpt_cur_t *c)
+{
+	return c->null_max_key != 0;
+}
 
 // return true if the two versions are equal
 static inline bool
@@ -82,4 +91,4 @@ vbpt_range_lt(const vbpt_range_t *r1, const vbpt_range_t *r2)
 }
 
 
-#endif /* VBPT_CURSOR_H */
+#endif /* VBPT_MERGE_H */

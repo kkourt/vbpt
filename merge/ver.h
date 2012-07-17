@@ -2,16 +2,29 @@
 #define VER_H__
 
 #include <stdbool.h>
+#include <inttypes.h>
 
 #include "refcnt.h"
 #include "container_of.h"
 #include "misc.h"
 
+// versions use two refernce counts:
+//  - v_refcounts: all references to a version:
+//     - from children versions
+//     - from objects pointing to a versions
+//  - children: references only from other versions
+//
+// The latter helps validating merges, not sure if is needed for more than
+// debugging -- i.e., we might be able to make sure that this does not happen by
+// correctly handling transaction nesting. For now, it is defined only for DEBUG
+// setups
+
 struct ver {
 	struct ver *parent;
 	refcnt_t   v_refcnt;
 	#ifndef NDEBUG
-	size_t v_id;
+	refcnt_t   children;
+	size_t     v_id;
 	#endif
 };
 typedef struct ver ver_t;
@@ -21,12 +34,15 @@ static void
 ver_init(ver_t *ver)
 {
 	#ifndef NDEBUG
+	/* XXX note that for this to work properly cases this function can't be
+	 * in a hder file -- move it to ver.c */
 	static size_t id = 0;
 	spinlock_t *lock_ptr = NULL;
 	spinlock_t lock;
 	#endif
 	refcnt_init(&ver->v_refcnt, 1);
 	#ifndef NDEBUG
+	refcnt_init(&ver->children, 0);
 	if (lock_ptr == NULL) { // XXX: race
 		spinlock_init(&lock);
 		lock_ptr = &lock;
@@ -40,11 +56,19 @@ ver_init(ver_t *ver)
 static inline char *
 ver_str(ver_t *ver)
 {
-	static char buff[128];
+	#define VERSTR_BUFF_SIZE 128
+	#define VERSTR_BUFFS_NR   16
+	static int i=0;
+	static char buff_arr[VERSTR_BUFFS_NR][VERSTR_BUFF_SIZE];
+	char *buff = buff_arr[i++ % VERSTR_BUFFS_NR];
 	#ifndef NDEBUG
-	snprintf(buff, sizeof(buff), " (ver:%3zd ) ", ver->v_id);
+	snprintf(buff, VERSTR_BUFF_SIZE, " [%p: ver:%3zd ch:%3u cnt:%3u] ",
+		 ver,
+	         ver->v_id,
+		 refcnt_get(&ver->children),
+		 refcnt_get(&ver->v_refcnt));
 	#else
-	snprintf(buff, sizeof(buff), " (ver:%p ) ", ver);
+	snprintf(buff, VERSTR_BUFF_SIZE, " (ver:%p ) ", ver);
 	#endif
 	return buff;
 }
@@ -83,8 +107,15 @@ static void
 ver_release(refcnt_t *refcnt)
 {
 	ver_t *ver = refcnt2ver(refcnt);
-	if (ver->parent)
+	#ifndef NDDEBUG
+	assert(refcnt_get(&ver->children) == 0);
+	#endif
+	if (ver->parent) {
+		#ifndef NDEBUG
+		refcnt_dec__(&ver->parent->children);
+		#endif
 		ver_putref(ver->parent);
+	}
 	free(ver);
 }
 
@@ -98,6 +129,15 @@ ver_create(void)
 	return ret;
 }
 
+static inline void
+ver_setparent__(ver_t *v, ver_t *parent)
+{
+	#ifndef NDEBUG
+	refcnt_inc__(&parent->children);
+	#endif
+	v->parent = ver_getref(parent);
+}
+
 /* branch (i.e., fork) a version */
 static inline ver_t *
 ver_branch(ver_t *parent)
@@ -106,10 +146,14 @@ ver_branch(ver_t *parent)
 	ver_t *ret = xmalloc(sizeof(ver_t));
 	ver_init(ret);
 	/* increase the reference count of the parent */
-	ret->parent = ver_getref(parent);
+	ver_setparent__(ret, parent);
 	return ret;
 }
 
+/*
+ * versions form a partial order, based on the version tree that arises from
+ * ->parent: v1 < v2 iff v1 is an ancestor of v2
+ */
 
 static inline bool
 ver_eq(ver_t *ver1, ver_t *ver2)
@@ -118,7 +162,8 @@ ver_eq(ver_t *ver1, ver_t *ver2)
 }
 
 /**
- * check if ver1 <= ver2 -- i.e., if ver1 is ancestor of ver2
+ * check if ver1 <= ver2 -- i.e., if ver1 is ancestor of ver2 or ver1 == ver2
+ *  moves upwards (to parents) from @ver2, until it encounters @ver1 or NULL
  */
 static inline bool
 ver_leq(ver_t *ver1, ver_t *ver2)
@@ -126,6 +171,22 @@ ver_leq(ver_t *ver1, ver_t *ver2)
 	for (ver_t *v = ver2; v != NULL; v = v->parent)
 		if (v == ver1)
 			return true;
+	return false;
+}
+
+/**
+ * check if ver1 <= ver2 -- i.e., if ver1 is ancestor of ver2 or ver1 == ver2
+ *  moves upwards (to parents) from @ver2, until it does @max_distance @steps or
+ *  encounters @ver1 or NULL.
+ */
+static inline bool
+ver_leq_limit(ver_t *v1, ver_t *v2, uint16_t max_distance)
+{
+	ver_t *v = v2;
+	for (uint16_t i=0; v != NULL && i < max_distance; v = v->parent, i++) {
+		if (v == v1)
+			return true;
+	}
 	return false;
 }
 
@@ -140,7 +201,8 @@ ver_leq(ver_t *ver1, ver_t *ver2)
  * the global path, so that we can iterate the pver path and check membership.
  */
 static ver_t *
-ver_join_slow(ver_t *gver, ver_t *pver, ver_t **prev_pver)
+ver_join_slow(ver_t *gver, ver_t *pver, ver_t **prev_pver,
+              uint16_t *gdist, uint16_t *pdist)
 {
 	ver_t *gv = gver;
 	for (unsigned gv_i = 0; gv_i < VER_JOIN_LIMIT; gv_i++) {
@@ -150,6 +212,8 @@ ver_join_slow(ver_t *gver, ver_t *pver, ver_t **prev_pver)
 				if (prev_pver)
 					*prev_pver = pv;
 				assert(pv->parent != NULL);
+				*gdist = gv_i + 1;
+				*pdist = pv_i + 1;
 				return pv->parent;
 			}
 
@@ -186,19 +250,62 @@ ver_join_slow(ver_t *gver, ver_t *pver, ver_t **prev_pver)
  *    ...        (gver)
  *     |
  *   (pver)
+ *
+ * Furthermore, another useful property for the merge algorithm is to now the
+ * distance of each version from the join point. This allows to have more
+ * efficient checks on whether a version found in the tree is before or after
+ * the join point. The distance of the join point from @gver (@pver) is returned
+ * in @gdist (@pdist).
  */
 static inline ver_t *
-ver_join(ver_t *gver, ver_t *pver, ver_t **prev_v)
+ver_join(ver_t *gver, ver_t *pver, ver_t **prev_v, uint16_t *gdist, uint16_t *pdist)
 {
 	/* this is the most common case, do it first */
 	if (gver->parent == pver->parent) {
 		assert(pver->parent != NULL);
 		if (prev_v)
 			*prev_v = pver;
+		*gdist = *pdist = 1;
 		return pver->parent;
 	}
-	return ver_join_slow(gver, pver, prev_v);
+	return ver_join_slow(gver, pver, prev_v, gdist, pdist);
 
 }
+
+/**
+ *  check if a version chain at @start and ending at @end has branches.
+ *  returns false if all refcounts between @start and @end are 1
+ *  aimed for debugging
+ */
+static inline bool
+ver_chain_has_branch(ver_t *tail, ver_t *head)
+{
+#ifndef NDEBUG
+	ver_t *v = tail;
+	while (true) {
+		if (refcnt_get(&v->children) > 1)
+			return true;
+		if (v == head)
+			break;
+		assert(v != NULL);
+		v = v->parent;
+	}
+#endif
+	return false;
+}
+
+/**
+ * set a parent to a version.
+ *  If previous parent is not NULL, refcount will be decreased
+ *  Will get a new referece of @new_parent
+ */
+static inline void
+ver_setparent(ver_t *ver, ver_t *new_parent)
+{
+	if (ver->parent)
+		ver_putref(ver->parent);
+	ver_setparent__(ver, new_parent);
+}
+
 
 #endif

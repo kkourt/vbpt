@@ -32,5 +32,17 @@
 
 #define DIV_ROUNDUP(n,d) (((n) + (d) - 1) / (d))
 
+#define dbg_print_str__ ">>>>>>>>>>>>>> %s() [%s +%d]"
+#define dbg_print_arg__ __FUNCTION__, __FILE__, __LINE__
+#define dbg_print(msg ,fmt, args...)\
+    printf(dbg_print_str__ " " msg fmt , dbg_print_arg__ , ##args)
+
+#define XDEBUG
+#define msg(fmt,args...)      dbg_print("msg:",fmt, ##args)
+#if defined(XDEBUG)
+    #define dmsg(fmt,args...) dbg_print("dbg:",fmt, ##args)
+#else
+    #define dmsg(fmt,args...) do { } while (0)
+#endif
 
 #endif /* MISC_H__ */

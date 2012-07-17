@@ -43,11 +43,7 @@ char *
 vbpt_hdr_str(vbpt_hdr_t *hdr)
 {
 	static char buff[128];
-	#ifndef NDEBUG
-	snprintf(buff, sizeof(buff), " (ver:%3zd cnt:%u) ", hdr->ver->v_id, hdr->h_refcnt.cnt);
-	#else
-	snprintf(buff, sizeof(buff), " (ver:%p cnt:%u) ", hdr->ver, hdr->h_refcnt.cnt);
-	#endif
+	snprintf(buff, sizeof(buff), " (%s cnt:%u) ", ver_str(hdr->ver), hdr->h_refcnt.cnt);
 	return buff;
 }
 
@@ -325,11 +321,12 @@ vbpt_tree_dealloc(vbpt_tree_t *tree)
  * old value
  */
 static vbpt_hdr_t *
-insert_ptr(vbpt_node_t *node, int slot, uint64_t key, vbpt_hdr_t *val)
+insert_ptr(vbpt_node_t *node, uint16_t slot, uint64_t key, vbpt_hdr_t *val)
 {
 	assert(slot < node->items_total);
 	assert(slot <= node->items_nr);
 	// this assumption is false: merges might add leafs with other versions
+	// TODO: maybe change the assert to an inequality about versions
 	//assert(node->n_hdr.ver == val->ver);
 
 	vbpt_kvp_t *kvp = node->kvp + slot;
@@ -350,6 +347,22 @@ insert_ptr(vbpt_node_t *node, int slot, uint64_t key, vbpt_hdr_t *val)
 	kvp->val = val;
 	node->items_nr++;
 	return NULL;
+}
+
+
+#define insert_ptr_empty(node, slot, key, hdr)               \
+do {                                                         \
+	vbpt_hdr_t *t__ = insert_ptr(node, slot, key, hdr);  \
+	assert(t__ == NULL);                                 \
+} while (0)
+
+/**
+ * non-static wrapper for insert_ptr()
+ */
+vbpt_hdr_t *
+vbpt_insert_ptr(vbpt_node_t *node, uint16_t slot, uint64_t key, vbpt_hdr_t *val)
+{
+	return insert_ptr(node, slot, key, val);
 }
 
 /**
@@ -505,7 +518,7 @@ delete_ptr(vbpt_tree_t *tree, vbpt_node_t *node, uint16_t slot,
 		tree->root = NULL;
 		tree->height = 0;
 	} else if (node->items_nr == 0) {
-		// this: deleting the last pointer of a non-root node shouldn't
+		// deleting the last pointer of a non-root node should never
 		// happen due to balancing
 		assert(false);
 	}
@@ -1114,6 +1127,29 @@ cow_needed(vbpt_tree_t *tree, ver_t *ver, int op)
 	return true;
 }
 
+/**
+ * create a chain of nodes, return the head, and add @last_hdr to the last
+ * levels. All nodes will be inserted at the first slot using @key
+ *
+ * Reference of @last_hdr will not be increased
+ */
+vbpt_node_t *
+vbpt_node_chain(vbpt_tree_t *tree, uint16_t levels, uint64_t key,
+                vbpt_hdr_t *last_hdr)
+{
+	assert(levels > 0);
+	vbpt_node_t *head, *tail;
+	head = tail = vbpt_node_alloc(VBPT_NODE_SIZE, tree->ver);
+	for  (uint16_t i=0; i<levels - 1; i++) {
+		vbpt_node_t *n = vbpt_node_alloc(VBPT_NODE_SIZE, tree->ver);
+		insert_ptr_empty(tail, 0, key, &n->n_hdr);
+		tail = n;
+	}
+	insert_ptr_empty(tail, 0, key, last_hdr);
+
+	return head;
+}
+
 /* build a chain of nodes */
 static void
 build_node_chain(vbpt_tree_t *tree, vbpt_path_t *path, uint64_t key)
@@ -1277,6 +1313,20 @@ vbpt_insert(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t *data, vbpt_leaf_t **ol
 		vbpt_hdr_putref(old);
 }
 
+/* a non-static wrapper for delete_ptr() */
+void
+vbpt_delete_ptr(vbpt_tree_t *tree, vbpt_path_t *path, vbpt_hdr_t **hdr_ptr)
+{
+	uint16_t lvl = path->height -1;
+	vbpt_node_t *node = path->nodes[lvl];
+	uint16_t slot = path->slots[lvl];
+	vbpt_hdr_t *hdr_ret = delete_ptr(tree, node, slot, path, lvl);
+
+	if (hdr_ptr)
+		*hdr_ptr = hdr_ret;
+	else vbpt_hdr_putref(hdr_ret);
+}
+
 void
 vbpt_delete(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t **data)
 {
@@ -1289,7 +1339,7 @@ vbpt_delete(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t **data)
 	uint16_t lvl = path->height - 1;
 	uint16_t slot = path->slots[lvl];
 	vbpt_node_t *node = path->nodes[lvl];
-	if (slot < node->items_nr && node->kvp[slot].key == key){
+	if (slot < node->items_nr && node->kvp[slot].key == key) {
 		vbpt_hdr_t *hdr_ret = delete_ptr(tree, node, slot, path, lvl);
 		ret = hdr2leaf(hdr_ret);
 	}
