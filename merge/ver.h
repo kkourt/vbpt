@@ -73,6 +73,16 @@ ver_str(ver_t *ver)
 	return buff;
 }
 
+static inline void
+ver_path_print(ver_t *v, FILE *fp)
+{
+	fprintf(fp, "ver path: ");
+	do {
+		fprintf(fp, "%s ->", ver_str(v));
+	} while ( (v = v->parent) != NULL);
+	fprintf(fp, "NULL\n");
+}
+
 static inline ver_t *
 refcnt2ver(refcnt_t *rcnt)
 {

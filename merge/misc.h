@@ -35,7 +35,7 @@
 #define dbg_print_str__ ">>>>>>>>>>>>>> %s() [%s +%d]"
 #define dbg_print_arg__ __FUNCTION__, __FILE__, __LINE__
 #define dbg_print(msg ,fmt, args...)\
-    printf(dbg_print_str__ " " msg fmt , dbg_print_arg__ , ##args)
+    printf(dbg_print_str__ " " msg "\033[31m" fmt "\033[0m" , dbg_print_arg__ , ##args)
 
 #define XDEBUG
 #define msg(fmt,args...)      dbg_print("msg:",fmt, ##args)

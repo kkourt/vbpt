@@ -74,6 +74,23 @@ vbpt_node_verify(vbpt_node_t *node)
 	if (kvp0->val->type == VBPT_LEAF)
 		return;
 
+	/** NOTE: we do this only for internal nodes, because vbpt_log_replay()
+	 * does not change the version of the leafs */
+	for (unsigned i=0; i < node->items_nr; i++) {
+		ver_t *child_ver = node->kvp[i].val->ver;
+		if (!ver_leq(child_ver, node->n_hdr.ver)) {
+			fprintf(stderr,
+			        "child has version %s"
+			         "and parent has version %s\n",
+			         ver_str(child_ver),
+			         ver_str(node->n_hdr.ver));
+			ver_path_print(child_ver, stderr);
+			ver_path_print(node->n_hdr.ver, stderr);
+			assert(false);
+		}
+	}
+
+
 	for (unsigned i=0; i < node->items_nr; i++) {
 		vbpt_kvp_t *kvp = node->kvp + i;
 		uint64_t key = kvp->key;
@@ -81,11 +98,12 @@ vbpt_node_verify(vbpt_node_t *node)
 		uint64_t high_key = c->kvp[c->items_nr - 1].key;
 		if (key != high_key) {
 			fprintf(stderr,
-				"child %u of node %p has high_key=%lu"
-				" and node has key=%lu\n",
-				  i, node, high_key, key);
+			        "child %u of node %p has high_key=%lu"
+			        " and node has key=%lu\n",
+			        i, node, high_key, key);
 			assert(false);
 		}
+
 	}
 }
 
