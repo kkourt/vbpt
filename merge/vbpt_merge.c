@@ -30,14 +30,17 @@ static inline void vbpt_cur_maybe_delete(vbpt_cur_t *c);
  * NULL values arise the following cases:
  *  - the empty keyspace between singular ranges in the last level of the tree
  *  - the empty keyspace before the first value in the tree
- * If ->null_max_key is not zero, cursor is currently in a null range
+ * If ->flags.null is 1, cursor is currently in a null range and its maximum
+ * value is ->null_maxkey
  */
 
 void
 vbpt_cur_print(const vbpt_cur_t *cur)
 {
-	printf("cursor: range:[%4lu+%4lu] null_max_key:%4lu tree:%p %s\n",
-	       cur->range.key, cur->range.len, cur->null_max_key, cur->tree,
+	printf("cursor: range:[%4lu+%4lu] null:%u null_max_key:%4lu tree:%p %s\n",
+	       cur->range.key, cur->range.len,
+	       cur->flags.null, cur->null_maxkey,
+	       cur->tree,
 	       ver_str(vbpt_cur_ver((vbpt_cur_t *)cur)));
 }
 
@@ -70,8 +73,9 @@ vbpt_cur_alloc(vbpt_tree_t *tree)
 	ret->tree = tree;
 	ret->path.height = 0;
 	ret->range = vbpt_range_full;
-	ret->null_max_key = 0;
+	ret->null_maxkey = 0;
 	ret->flags.deleteme = 0;
+	ret->flags.null = 0;
 	return ret;
 }
 
@@ -98,9 +102,9 @@ vbpt_cur_ver(const vbpt_cur_t *cur)
 	const vbpt_tree_t *tree = cur->tree;
 	if (path->height == 0) {
 		return tree->ver;
-	} else if (cur->null_max_key == 0) {
+	} else if (!vbpt_cur_null(cur)) {
 		return vbpt_cur_hdr((vbpt_cur_t *)cur)->ver;
-	} else {
+	} else { // cursor points to NULL, return the version of the last node
 		vbpt_node_t *pnode = path->nodes[path->height -1];
 		return pnode->n_hdr.ver;
 	}
@@ -119,7 +123,7 @@ vbpt_cur_down(vbpt_cur_t *cur)
 	//dmsg("IN  "); vbpt_cur_print(cur);
 
 	// sanity checks
-	assert(!cur->null_max_key && "Can't go down: pointing to NULL");
+	assert(!vbpt_cur_null(cur) && "Can't go down: pointing to NULL");
 	if (hdr->type == VBPT_LEAF) {
 		assert(cur->range.len == 1); // if this is a leaf, only one key
 		assert(false && "Can't go down: pointing to a leaf");
@@ -142,7 +146,8 @@ vbpt_cur_down(vbpt_cur_t *cur)
 	} else if (node_key0 > cur->range.key) {
 		// last-level, where we need to insert a NULL area
 		cur->range.len = node_key0 - cur->range.key;
-		cur->null_max_key = node_key0 - 1;
+		cur->flags.null = 1;
+		cur->null_maxkey = node_key0 - 1;
 		path->slots[path->height -1] = 0;
 	} else {
 		// last-level, singular range pointing to a leaf
@@ -162,7 +167,7 @@ vbpt_cur_downrange(vbpt_cur_t *cur, const vbpt_cur_t *cur2)
 	const vbpt_range_t *r = &cur2->range;
 	assert(vbpt_range_lt(r, &cur->range));
 	do {
-		if (cur->null_max_key > 0)
+		if (vbpt_cur_null(cur))
 			cur->range = *r;
 		else
 			vbpt_cur_down(cur);
@@ -182,16 +187,16 @@ vbpt_cur_next_leaf(vbpt_cur_t *cur)
 	assert(nslot < n->items_nr);
 	assert(vbpt_cur_hdr(cur)->type == VBPT_LEAF);
 
-	if (cur->null_max_key != 0) {
+	if (vbpt_cur_null(cur)) {
 		assert(!cur->flags.deleteme);
 		// cursor pointing to NULL already:
 		uint64_t r_last = cur->range.key + cur->range.len - 1;
-		assert(r_last <= cur->null_max_key);
-		if (r_last < cur->null_max_key) {
+		assert(r_last <= cur->null_maxkey);
+		if (r_last < cur->null_maxkey) {
 			// if the curent NULL range has not ended, just update
 			// the cursor to the remaining NULL range.
 			cur->range.key = r_last + 1;
-			cur->range.len = cur->null_max_key - r_last;
+			cur->range.len = cur->null_maxkey - r_last;
 			return 0;
 		} else if (nslot == n->items_nr) {
 			// if the current NULL range has ended, but there are no
@@ -203,7 +208,8 @@ vbpt_cur_next_leaf(vbpt_cur_t *cur)
 		} else {
 			// if the current NULL range has ended, and there are
 			// more items to the next key
-			cur->null_max_key = 0;
+			cur->null_maxkey = 0;
+			cur->flags.null = 0;
 			goto next_key;
 		}
 	} else if (nslot + 1  == n->items_nr) {
@@ -226,7 +232,8 @@ vbpt_cur_next_leaf(vbpt_cur_t *cur)
 			// it. Note that nslot for null values points to the
 			// next node
 			path->slots[path->height - 1] = nslot + 1;
-			cur->null_max_key = next_key - 1;
+			cur->flags.null = 1;
+			cur->null_maxkey = next_key - 1;
 			cur->range.key += 1;
 			cur->range.len = next_key - cur->range.key;
 			return 0;
@@ -244,7 +251,8 @@ move_up:
 	if (--path->height == 0) {
 		cur->range.key = cur->range.key + cur->range.len;
 		cur->range.len = VBPT_KEY_MAX - cur->range.key;
-		cur->null_max_key = VBPT_KEY_MAX;
+		cur->flags.null = 1;
+		cur->null_maxkey = VBPT_KEY_MAX;
 		return 0;
 	} else return vbpt_cur_next(cur);
 }
@@ -265,8 +273,8 @@ vbpt_cur_next(vbpt_cur_t *cur)
 	if (hdr->type == VBPT_LEAF) {
 		ret = vbpt_cur_next_leaf(cur);
 		goto end;
-	} else if (path->height == 0 && cur->null_max_key != 0) {
-		assert(cur->null_max_key == VBPT_KEY_MAX);
+	} else if (path->height == 0 && vbpt_cur_null(cur)) {
+		assert(cur->null_maxkey == VBPT_KEY_MAX);
 		cur->range.key += cur->range.len;
 		cur->range.len = VBPT_KEY_MAX - cur->range.key;
 		goto end;
@@ -288,7 +296,8 @@ vbpt_cur_next(vbpt_cur_t *cur)
 		if (--path->height == 0) {
 			cur->range.key += cur->range.len;
 			cur->range.len = VBPT_KEY_MAX - cur->range.key;
-			cur->null_max_key = VBPT_KEY_MAX;
+			cur->flags.null = 1;
+			cur->null_maxkey = VBPT_KEY_MAX;
 			break;
 		}
 	}
@@ -305,7 +314,7 @@ bool
 vbpt_cur_end(vbpt_cur_t *cur)
 {
 	vbpt_path_t *path = &cur->path;
-	return (path->height == 0 && cur->null_max_key == VBPT_KEY_MAX);
+	return (path->height == 0 && cur->null_maxkey == VBPT_KEY_MAX);
 }
 
 /**
@@ -510,9 +519,11 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 	if (p_hdr) {
 		vbpt_hdr_putref(p_hdr);
 	} else {
-		assert(pc->null_max_key != 0);
-		if (pc->path.height != 0)
-			pc->null_max_key = 0;
+		assert(vbpt_cur_null(pc));
+		if (pc->path.height != 0) {
+			pc->null_maxkey = 0;
+			pc->flags.null = 0;
+		}
 	}
 
 	return true;

@@ -51,16 +51,17 @@ struct vbpt_cur {
 	vbpt_tree_t  *tree;
 	vbpt_path_t  path;
 	vbpt_range_t range;
-	uint64_t     null_max_key;
+	uint64_t     null_maxkey;
 	struct {
 		uint8_t deleteme:1;
+		uint8_t null:1;
 	}            flags;
 };
 
 static inline bool
 vbpt_cur_null(const vbpt_cur_t *c)
 {
-	return c->null_max_key != 0;
+	return c->flags.null != 0;
 }
 
 // return true if the two versions are equal
