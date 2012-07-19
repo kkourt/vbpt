@@ -768,17 +768,21 @@ vbpt_merge(const vbpt_txtree_t *gtree, vbpt_txtree_t *ptree)
 
 	vbpt_cur_t *gc = vbpt_cur_alloc(gt);
 	vbpt_cur_t *pc = vbpt_cur_alloc(pt);
+	bool merge_ok = true;
 
 	uint16_t g_dist, p_dist;
-	ver_t *hpver;
+	ver_t *hpver = NULL; // initialize to shut the compiler up
 	ver_t *gver = gt->ver;
 	ver_t *pver = pt->ver;
 	ver_t *vj = ver_join(gver, pver, &hpver, &g_dist, &p_dist);
+	if (vj == VER_JOIN_FAIL) {
+		merge_ok = false;
+		goto end;
+	}
 	#if defined(XDEBUG_MERGE)
 	printf("VERSIONS: gver:%s  pver:%s  vj:%s\n", ver_str(gver), ver_str(pver), ver_str(vj));
 	#endif
 
-	bool merge_ok = true;
 	while (!(vbpt_cur_end(gc) && vbpt_cur_end(pc))) {
 		vbpt_cur_sync(gc, pc);
 		int ret = do_merge(gc, pc, gtree, ptree, gver, pver, g_dist, p_dist, vj);

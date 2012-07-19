@@ -35,4 +35,4 @@ vbpt_gv.o: vbpt_gv.c $(hdrs)
 	 dot -Tpdf $< -o $@
 
 clean: 
-	rm -f *.o vbpt-cur-test vbpt-test *.gcno *.gcov *.gcda
+	rm -f *.o vbpt-merge-test vbpt-cur-test vbpt-test *.gcno *.gcov *.gcda *.i
