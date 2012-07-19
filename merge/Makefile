@@ -26,6 +26,11 @@ vbpt-merge-test: vbpt.c vbpt_gv.c phash.c vbpt_merge.c vbpt_log.c $(hdrs)
 vbpt_gv.o: vbpt_gv.c $(hdrs)
 	$(CC) $(CFLAGS) $< -c -o $@
 
+%.s: %.c
+	$(CC) $(CFLAGS)-S -fverbose-asm $<
+%.i: %.c
+	$(CC)  $(CFLAGS) -E $< | indent -kr > $@
+
 %.pdf: %.dot
 	 dot -Tpdf $< -o $@
 

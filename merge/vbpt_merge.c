@@ -8,7 +8,7 @@
 
 #define VBPT_KEY_MAX UINT64_MAX
 
-#define XDEBUG_MERGE
+//#define XDEBUG_MERGE
 
 // forward declaration
 static inline void vbpt_cur_maybe_delete(vbpt_cur_t *c);
@@ -497,7 +497,7 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 	if (vbpt_cur_null(pc)) {
 		assert(p_pnode->items_nr <= p_pnode->items_total);
 		if (p_pnode->items_nr == p_pnode->items_total) {
-			printf("pc points to NULL, and no room in node\n");
+			//printf("pc points to NULL, and no room in node\n");
 			return false;
 		}
 		// slot should be OK
@@ -536,8 +536,8 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 bool
 vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 {
-	dmsg("REPLACE: "); vbpt_cur_print(pc);
-	dmsg("WITH:    "); vbpt_cur_print(gc);
+	//dmsg("REPLACE: "); vbpt_cur_print(pc);
+	//dmsg("WITH:    "); vbpt_cur_print(gc);
 
 	if (vbpt_cur_null(gc)) {
 		return (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc));
@@ -892,7 +892,7 @@ print_arr(uint64_t *arr, uint64_t arr_len)
 	printf("\n");
 }
 
-static void
+static bool
 vbpt_merge_test(vbpt_tree_t *t,
                uint64_t *ins1, uint64_t ins1_len,
 	       uint64_t *ins2, uint64_t ins2_len)
@@ -906,7 +906,7 @@ vbpt_merge_test(vbpt_tree_t *t,
 	vbpt_txtree_t *txt2_b = vbpt_txtree_alloc(t);
 	vbpt_txtree_insert_bulk(txt2_b, ins2, ins2_len);
 
-	#if 1
+	#if 0
 	dmsg("PARENT: "); vbpt_tree_print(t, true);
 	dmsg("T1:     "); vbpt_tree_print(txt1->tx_tree, true);
 	dmsg("T2:     "); vbpt_tree_print(txt2_a->tx_tree, true);
@@ -915,27 +915,29 @@ vbpt_merge_test(vbpt_tree_t *t,
 	unsigned log_ret = vbpt_log_merge(txt1, txt2_a);
 	unsigned mer_ret = vbpt_merge(txt1, txt2_b);
 
+	bool success = false;
 	int err = 0;
 	switch (log_ret + (mer_ret<<1)) {
 		case 0:
-		printf("Both merges failed\n");
+		//printf("Both merges failed\n");
 		break;
 
 		case 1:
-		printf("Only log_merge succeeded\n");
+		//printf("Only log_merge succeeded\n");
 		break;
 
 		case 2:
-		printf("ERROR: merge succeeded, but log_merge failed\n");
+		//printf("ERROR: merge succeeded, but log_merge failed\n");
 		err = 1;
 		break;
 
 		case 3:
-		printf("Both merges succeeded\n");
+		//printf("Both merges succeeded\n");
 		if (!vbpt_cmp(txt2_a->tx_tree, txt2_b->tx_tree)) {
-			printf("======> But resulting trees are not the same\n");
+			printf("======> Resulting trees are not the same\n");
 			err = 1;
 		}
+		success = true;
 		break;
 
 		default:
@@ -954,11 +956,13 @@ vbpt_merge_test(vbpt_tree_t *t,
 
 	if (err)
 		assert(false);
+
+	return success;
 }
 
 #include "array_size.h"
 
-static void __attribute__((unused))
+static bool __attribute__((unused))
 test1(void)
 {
 	uint64_t keys0[] = {42, 100};
@@ -968,10 +972,10 @@ test1(void)
 	vbpt_tree_t *t = vbpt_tree_create();
 	vbpt_tree_insert_bulk(t, keys0, ARRAY_SIZE(keys0));
 
-	vbpt_merge_test(t, keys1, ARRAY_SIZE(keys1), keys2, ARRAY_SIZE(keys2));
+	return vbpt_merge_test(t, keys1, ARRAY_SIZE(keys1), keys2, ARRAY_SIZE(keys2));
 }
 
-static void __attribute__((unused))
+static bool __attribute__((unused))
 test2(void)
 {
 	uint64_t keys0[] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
@@ -982,7 +986,7 @@ test2(void)
 	vbpt_tree_t *t = vbpt_tree_create();
 	vbpt_tree_insert_bulk(t, keys0, ARRAY_SIZE(keys0));
 
-	vbpt_merge_test(t, keys1, ARRAY_SIZE(keys1), keys2, ARRAY_SIZE(keys2));
+	return vbpt_merge_test(t, keys1, ARRAY_SIZE(keys1), keys2, ARRAY_SIZE(keys2));
 }
 
 // distribution description
@@ -992,6 +996,7 @@ struct dist_desc {
 	uint64_t nr;
 	unsigned int seed;
 	uint64_t *data;
+	uint64_t data_len;
 };
 
 static void
@@ -1001,16 +1006,21 @@ generate_keys(struct dist_desc *d)
 		assert(false && "FIXME");
 	}
 
-	assert(d->data == NULL);
 	unsigned int seed = d->seed;
-	d->data = xmalloc(sizeof(uint64_t)*d->nr);
+	uint64_t data_len = sizeof(uint64_t)*d->nr;
+	if (d->data == NULL) {
+		d->data = xmalloc(data_len);
+	} else if (d->data_len != data_len) {
+		d->data = xrealloc(d->data, data_len);
+	}
+	d->data_len = data_len;
 	for (uint64_t i=0; i<d->nr; i++) {
 		uint64_t r = (seed == 0) ? i : rand_r(&seed);
 		d->data[i] = d->r_start + (r % d->r_len);
 	}
 }
 
-static void
+static bool
 test_merge_rand(struct dist_desc *d0, struct dist_desc *d1, struct dist_desc *d2)
 {
 	generate_keys(d0);
@@ -1020,7 +1030,7 @@ test_merge_rand(struct dist_desc *d0, struct dist_desc *d1, struct dist_desc *d2
 	vbpt_tree_t *t = vbpt_tree_create();
 	vbpt_tree_insert_bulk(t, d0->data, d0->nr);
 
-	vbpt_merge_test(t, d1->data, d1->nr, d2->data, d2->nr);
+	return vbpt_merge_test(t, d1->data, d1->nr, d2->data, d2->nr);
 }
 
 int main(int argc, const char *argv[])
@@ -1028,10 +1038,22 @@ int main(int argc, const char *argv[])
 	//test1();
 	//test2();
 	#if 1
-	struct dist_desc d0 = { .r_start =   0, .r_len = 128, .nr =  16,  .seed = 1, .data = NULL};
-	struct dist_desc d1 = { .r_start =   0, .r_len =  64, .nr =    4, .seed = 2, .data = NULL};
-	struct dist_desc d2 = { .r_start =  64, .r_len =  64, .nr =    4, .seed = 3, .data = NULL};
-	test_merge_rand(&d0, &d1, &d2);
+	struct dist_desc d0 = { .r_start =   0, .r_len =1024, .nr = 512,  .seed = 0, .data = NULL};
+	struct dist_desc d1 = { .r_start =   0, .r_len = 512, .nr =   16, .seed = 0, .data = NULL};
+	struct dist_desc d2 = { .r_start = 512, .r_len = 512, .nr =   16, .seed = 0, .data = NULL};
+
+	unsigned count=0, successes=0;
+	for (unsigned i=0; i<32; i++)
+		for (unsigned j=0; j<32; j++)
+			for (unsigned k=0; j<32; j++) {
+				d0.seed = i;
+				d1.seed = j;
+				d2.seed = k;
+				//printf("Testing %u %u %u\n", i, j, k);
+				successes += test_merge_rand(&d0, &d1, &d2);
+				count++;
+			}
+	printf("------> Count: %u Successes: %u\n", count, successes);
 	#endif
 
 	return 0;

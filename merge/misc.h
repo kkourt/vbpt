@@ -29,6 +29,13 @@
 	}                          \
 	ret_;})
 
+#define xrealloc(ptr, s) ({           \
+	void *ret_ = realloc(ptr, s); \
+	if (ret_ == NULL) {           \
+		perror("realloc");    \
+		exit(1);              \
+	}                             \
+	ret_;})
 
 #define DIV_ROUNDUP(n,d) (((n) + (d) - 1) / (d))
 
