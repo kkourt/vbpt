@@ -116,6 +116,7 @@ vbpt_cur_down(vbpt_cur_t *cur)
 {
 	vbpt_hdr_t *hdr = vbpt_cur_hdr(cur);
 	vbpt_path_t *path = &cur->path;
+	//dmsg("IN  "); vbpt_cur_print(cur);
 
 	// sanity checks
 	assert(!cur->null_max_key && "Can't go down: pointing to NULL");
@@ -137,9 +138,9 @@ vbpt_cur_down(vbpt_cur_t *cur)
 	// update the range by reducing the length
 	if (vbpt_cur_hdr(cur)->type == VBPT_NODE) {
 		assert(node_key0 - cur->range.key);
-		cur->range.len = node_key0 - cur->range.key;
+		cur->range.len = node_key0 - cur->range.key + 1;
 	} else if (node_key0 > cur->range.key) {
-		// last-level, where we need to inset a NULL area
+		// last-level, where we need to insert a NULL area
 		cur->range.len = node_key0 - cur->range.key;
 		cur->null_max_key = node_key0 - 1;
 		path->slots[path->height -1] = 0;
@@ -148,6 +149,8 @@ vbpt_cur_down(vbpt_cur_t *cur)
 		cur->range.key = node_key0;
 		cur->range.len = 1;
 	}
+
+	//dmsg("OUT  "); vbpt_cur_print(cur);
 }
 
 /**
@@ -163,7 +166,7 @@ vbpt_cur_downrange(vbpt_cur_t *cur, const vbpt_cur_t *cur2)
 			cur->range = *r;
 		else
 			vbpt_cur_down(cur);
-	} while (!vbpt_range_leq(r, &cur->range));
+	} while (vbpt_range_lt(r, &cur->range));
 }
 
 /**
@@ -278,7 +281,7 @@ vbpt_cur_next(vbpt_cur_t *cur)
 			path->slots[path->height -1] = nslot + 1;
 			uint64_t old_high_k = n->kvp[nslot].key;
 			cur->range.key = old_high_k + 1;
-			cur->range.len = n->kvp[nslot+1].key - old_high_k;
+			cur->range.len = n->kvp[nslot+1].key - cur->range.key + 1;
 			break;
 		}
 
@@ -291,7 +294,7 @@ vbpt_cur_next(vbpt_cur_t *cur)
 	}
 
 end:
-	//dmsg("OUT "); vbpt_cur_print(cur);
+	//DMSG("ouT "); vbpt_cur_print(cur);
 	return ret;
 }
 
@@ -452,13 +455,21 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 	//  - if this is an internal node use the maximum val
 	// [Maybe rethink about range representation]
 	uint64_t p_key = (pc->range.len == 1) ? pc->range.key : pc->range.key + pc->range.len;
+	p_key = pc->range.key + pc->range.len - 1;
 
 	#if !defined(NDEBUG)
 	assert(gc->path.height > 0);
 	vbpt_node_t *p_gnode = gc->path.nodes[gc->path.height - 1];
 	uint16_t p_gslot = gc->path.slots[gc->path.height - 1];
 	uint64_t g_key = p_gnode->kvp[p_gslot].key;
-	assert(g_key == p_key);
+	if (g_key != p_key) {
+		vbpt_tree_print(gc->tree, false);
+		vbpt_tree_print(pc->tree, false);
+		vbpt_cur_print(gc);
+		vbpt_cur_print(pc);
+		dmsg("g_key=%lu p_key=%lu\n", g_key, p_key);
+		assert(g_key == p_key);
+	}
 	#endif
 
 	vbpt_node_t *p_pnode;
@@ -580,6 +591,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	      gc->range.key, gc->range.len, ver_str(gc_v), ver_str(pc_v));
 	#endif
 	vbpt_log_t *plog = ptree->tx_log;
+	vbpt_log_t *glog = gtree->tx_log;
 	vbpt_range_t *range = &pc->range;
 
 	/*
@@ -643,10 +655,8 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		#endif
 		// if both cursors point to NULL, there is a conflict if @gv has
 		// read an item from the previous state, which may not have been
-		// NULL.
-		// NOTE: we could also check whether @glog contains a delete to
-		// that range. However, for now we just use @plog for the merge,
-		// which would be convenient for the distributed case
+		// NULL.  We could also check whether @glog contains a delete to
+		// that range.
 		return vbpt_log_rs_range_exists(plog, range) ? -1:1;
 	} else if (vbpt_cur_null(pc)) {
 		#if defined(XDEBUG_MERGE)
@@ -667,7 +677,15 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// @gc points  to NULL, but @pc does not. We can't just check
 		// against the readset of @plog and keep the NULL: If @gc
 		// deleted a key, that @pc still has due to COW (not because it
-		// inserted it) we need to delete it.
+		// inserted it) we would need to delete it.
+
+		// Since, however, @gc points to NULL, if there are no deletions
+		// in Log(J->G), then @jv pointed to NULL for gc->range. Hence,
+		// if there are no Reads in Log(J->P), there is no conflict.
+		if (!vbpt_log_ds_range_exists(glog, range) &&
+		    !vbpt_log_rs_range_exists(plog, range)) {
+			return 1;
+		}
 
 		// special case: this is a leaf that we now has changed after
 		// @vj -- we just keep it similarly to leaf checks
@@ -877,7 +895,7 @@ vbpt_merge_test(vbpt_tree_t *t,
 	vbpt_txtree_t *txt2_b = vbpt_txtree_alloc(t);
 	vbpt_txtree_insert_bulk(txt2_b, ins2, ins2_len);
 
-	#if 0
+	#if 1
 	dmsg("PARENT: "); vbpt_tree_print(t, true);
 	dmsg("T1:     "); vbpt_tree_print(txt1->tx_tree, true);
 	dmsg("T2:     "); vbpt_tree_print(txt2_a->tx_tree, true);
@@ -913,7 +931,7 @@ vbpt_merge_test(vbpt_tree_t *t,
 		assert(false);
 	}
 
-	if (err) {
+	if (0 || err) {
 		printf("INITIAL  : "); vbpt_tree_print(t, true);
 		printf("\n");
 		printf("INS1     : "); print_arr(ins1, ins1_len);
@@ -929,7 +947,8 @@ vbpt_merge_test(vbpt_tree_t *t,
 
 #include "array_size.h"
 
-void test1(void)
+static void __attribute__((unused))
+test1(void)
 {
 	uint64_t keys0[] = {42, 100};
 	uint64_t keys1[] = {66, 99, 200};
@@ -941,7 +960,8 @@ void test1(void)
 	vbpt_merge_test(t, keys1, ARRAY_SIZE(keys1), keys2, ARRAY_SIZE(keys2));
 }
 
-void test2(void)
+static void __attribute__((unused))
+test2(void)
 {
 	uint64_t keys0[] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
 	130, 140, 150, 160, 170, 180, 190, 200};
@@ -954,10 +974,55 @@ void test2(void)
 	vbpt_merge_test(t, keys1, ARRAY_SIZE(keys1), keys2, ARRAY_SIZE(keys2));
 }
 
+// distribution description
+struct dist_desc {
+	uint64_t r_start;
+	uint64_t r_len;
+	uint64_t nr;
+	unsigned int seed;
+	uint64_t *data;
+};
+
+static void
+generate_keys(struct dist_desc *d)
+{
+	if (d->r_len > RAND_MAX) {
+		assert(false && "FIXME");
+	}
+
+	assert(d->data == NULL);
+	unsigned int seed = d->seed;
+	d->data = xmalloc(sizeof(uint64_t)*d->nr);
+	for (uint64_t i=0; i<d->nr; i++) {
+		uint64_t r = (seed == 0) ? i : rand_r(&seed);
+		d->data[i] = d->r_start + (r % d->r_len);
+	}
+}
+
+static void
+test_merge_rand(struct dist_desc *d0, struct dist_desc *d1, struct dist_desc *d2)
+{
+	generate_keys(d0);
+	generate_keys(d1);
+	generate_keys(d2);
+
+	vbpt_tree_t *t = vbpt_tree_create();
+	vbpt_tree_insert_bulk(t, d0->data, d0->nr);
+
+	vbpt_merge_test(t, d1->data, d1->nr, d2->data, d2->nr);
+}
+
 int main(int argc, const char *argv[])
 {
-	test1();
-	test2();
+	//test1();
+	//test2();
+	#if 1
+	struct dist_desc d0 = { .r_start =   0, .r_len = 128, .nr =  16,  .seed = 1, .data = NULL};
+	struct dist_desc d1 = { .r_start =   0, .r_len =  64, .nr =    4, .seed = 2, .data = NULL};
+	struct dist_desc d2 = { .r_start =  64, .r_len =  64, .nr =    4, .seed = 3, .data = NULL};
+	test_merge_rand(&d0, &d1, &d2);
+	#endif
+
 	return 0;
 }
 #endif
