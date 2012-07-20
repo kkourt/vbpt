@@ -32,7 +32,7 @@ struct ver {
 	refcnt_t   children;
 	size_t     v_id;
 	#endif
-	vbpt_log_t log;
+	vbpt_log_t v_log;
 };
 typedef struct ver ver_t;
 
@@ -60,7 +60,7 @@ ver_init(ver_t *ver)
 	#endif
 
 	// XXX: ugly but useful
-	ver->log.state = VBPT_LOG_UNINITIALIZED;
+	ver->v_log.state = VBPT_LOG_UNINITIALIZED;
 }
 
 static inline char *
@@ -243,6 +243,11 @@ ver_join_slow(ver_t *gver, ver_t *pver, ver_t **prev_pver,
 		if ((gv = gv->parent) == NULL)
 			break;
 	}
+
+	// gdist, pdist won't get used if VER_JOIN_FAIL is returned, but the
+	// compiler can't seem to be able to figure that out and complains about
+	// uninitialized values
+	*gdist = *pdist = ~0;
 	return VER_JOIN_FAIL;
 }
 
@@ -327,5 +332,31 @@ ver_setparent(ver_t *ver, ver_t *new_parent)
 	ver_setparent__(ver, new_parent);
 }
 
+static inline ver_t *
+ver_parent(ver_t *ver)
+{
+	return ver->parent;
+}
+
+/*
+ * Log helpers
+ */
+static inline ver_t *
+vbpt_log2ver(vbpt_log_t *log)
+{
+	return container_of(log, ver_t, v_log);
+}
+
+/**
+ * return the parent log
+ *  Assumption: this is a log embedded in a version
+ */
+static inline vbpt_log_t *
+vbpt_log_parent(vbpt_log_t *log)
+{
+	ver_t *ver = vbpt_log2ver(log);
+	ver_t *ver_p = ver_parent(ver);
+	return (ver_p != NULL) ? &ver_p->v_log : NULL;
+}
 
 #endif

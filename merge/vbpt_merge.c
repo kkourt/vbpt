@@ -574,11 +574,15 @@ vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree)
 	vbpt_log_t *g_log = vbpt_txtree_getlog(gtree);
 	vbpt_log_t *p_log = vbpt_txtree_getlog(ptree);
 
-	if (vbpt_log_conflict(g_log, p_log)) {
+	uint16_t g_dist, p_dist;
+	ver_t *hpver = NULL; // initialize to shut the compiler up
+	ver_join(gtree->ver, ptree->ver, &hpver, &g_dist, &p_dist);
+
+	if (vbpt_log_conflict(g_log, g_dist, p_log, p_dist)) {
 		printf("%s => CONFLICT\n", __FUNCTION__);
 		return false;
 	}
-	vbpt_log_replay(ptree, g_log);
+	vbpt_log_replay(ptree, g_log, g_dist);
 	return true;
 }
 
@@ -598,7 +602,7 @@ vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree)
  *      |          /     (pv)    -|
  *      |-       (gv)
  */
-static inline int
+static int
 do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
         const vbpt_tree_t *gtree, vbpt_tree_t *ptree,
         ver_t *gv, ver_t  *pv, uint16_t g_dist, uint16_t p_dist, ver_t *jv)
@@ -646,7 +650,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// check if private tree read something that is under the
 		// current (changed in the global tree) range. If it did,
 		// it would read an older value, so we need to abort.
-		if (vbpt_log_rs_range_exists(plog, range))
+		if (vbpt_log_rs_range_exists(plog, range, p_dist))
 			return -1;
 		// we need to effectively replace the node pointed by @pv with
 		// the node pointed by @gc
@@ -677,16 +681,16 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// read an item from the previous state, which may not have been
 		// NULL.  We could also check whether @glog contains a delete to
 		// that range.
-		return vbpt_log_rs_range_exists(plog, range) ? -1:1;
+		return vbpt_log_rs_range_exists(plog, range, p_dist) ? -1:1;
 	} else if (vbpt_cur_null(pc)) {
 		#if defined(XDEBUG_MERGE)
 		printf("pc is NULL\n");
 		#endif
 		// @pc points to NULL, but @gc does not. If @pv did not read or
 		// delete anything in that range, we can replace @pc with @gc.
-		if (vbpt_log_rs_range_exists(plog, range))
+		if (vbpt_log_rs_range_exists(plog, range, p_dist))
 			return -1;
-		if (vbpt_log_ds_range_exists(plog, range))
+		if (vbpt_log_ds_range_exists(plog, range, p_dist))
 			return -1;
 		//printf("trying to replace pc with gc\n");
 		return vbpt_cur_replace(pc, gc) ? 1: -1;
@@ -702,14 +706,15 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// Since, however, @gc points to NULL, if there are no deletions
 		// in Log(J->G), then @jv pointed to NULL for gc->range. Hence,
 		// if there are no Reads in Log(J->P), there is no conflict.
-		if (!vbpt_log_ds_range_exists(glog, range) &&
-		    !vbpt_log_rs_range_exists(plog, range)) {
+		if (!vbpt_log_ds_range_exists(glog, range, g_dist) &&
+		    !vbpt_log_rs_range_exists(plog, range, p_dist)) {
 			return 1;
 		}
 
 		// special case: this is a leaf that we now has changed after
 		// @vj -- we just keep it similarly to leaf checks
-		if (range->len == 1 && !vbpt_log_rs_key_exists(plog, range->key))
+		if (range->len == 1 &&
+		    !vbpt_log_rs_key_exists(plog, range->key, p_dist))
 			return 1;
 
 		return -1;
@@ -717,7 +722,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 
 	assert(!vbpt_cur_null(gc) && !vbpt_cur_null(pc));
 	if (range->len == 1) {
-		return vbpt_log_rs_key_exists(plog, range->key) ? -1:1;
+		return vbpt_log_rs_key_exists(plog, range->key, p_dist) ? -1:1;
 	}
 
 	/* we need to go deeper */

@@ -130,38 +130,69 @@ vbpt_log_delete(vbpt_log_t *log, uint64_t key)
  */
 
 bool
-vbpt_log_ws_key_exists(vbpt_log_t *log, uint64_t key)
+vbpt_log_ws_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth)
 {
-	ul_t dummy_val;
-	return phash_lookup(&log->wr_set, key, &dummy_val);
+	for (unsigned i=0; i<depth; i++) {
+		ul_t dummy_val;
+		if (phash_lookup(&log->wr_set, key, &dummy_val))
+			return true;
+		log = vbpt_log_parent(log);
+		assert(log != NULL);
+	}
+	return false;
 }
 
 
 // read set (rs) checks
 bool
-vbpt_log_rs_key_exists(vbpt_log_t *log, uint64_t key)
+vbpt_log_rs_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth)
 {
-	return pset_key_exists(&log->rd_set, key);
+	for (unsigned i=0; i<depth; i++) {
+		if (pset_key_exists(&log->rd_set, key))
+			return true;
+		log = vbpt_log_parent(log);
+		assert(log != NULL);
+	}
+	return false;
 }
 
 bool
-vbpt_log_rs_range_exists(vbpt_log_t *log, vbpt_range_t *r)
+vbpt_log_rs_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth)
 {
-	return pset_range_exists(&log->rd_set, r->key, r->len);
+	for (unsigned i=0; i<depth; i++) {
+		if (pset_range_exists(&log->rd_set, r->key, r->len))
+			return true;
+		log = vbpt_log_parent(log);
+		assert(log != NULL);
+	}
+	return false;
 }
 
 // delete set (ds) checks
 bool
-vbpt_log_ds_range_exists(vbpt_log_t *log, vbpt_range_t *r)
+vbpt_log_ds_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth)
 {
-	return pset_range_exists(&log->rm_set, r->key, r->len);
+	for (unsigned i=0; i<depth; i++) {
+		if (pset_key_exists(&log->rm_set, key))
+			return true;
+		log = vbpt_log_parent(log);
+		assert(log != NULL);
+	}
+	return false;
 }
 
 bool
-vbpt_log_ds_key_exists(vbpt_log_t *log, uint64_t key)
+vbpt_log_ds_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth)
 {
-	return pset_key_exists(&log->rm_set, key);
+	for (unsigned i=0; i<depth; i++) {
+		if (pset_range_exists(&log->rm_set, r->key, r->len))
+			return true;
+		log = vbpt_log_parent(log);
+		assert(log != NULL);
+	}
+	return false;
 }
+
 
 
 /*
@@ -169,26 +200,31 @@ vbpt_log_ds_key_exists(vbpt_log_t *log, uint64_t key)
  */
 
 bool
-vbpt_log_conflict(vbpt_log_t *log1_rd, vbpt_log_t *log2_wr)
+vbpt_log_conflict(vbpt_log_t *log1_rd, unsigned depth1,
+                  vbpt_log_t *log2_wr, unsigned depth2)
 {
 	if (vbpt_log_wr_size(log2_wr) == 0 || vbpt_log_rd_size(log1_rd) == 0)
 		return false;
 
-	pset_t *rd_set = &log1_rd->rd_set;
-	pset_iter_t pi;
-	pset_iter_init(rd_set, &pi);
-	while (true) {
-		ul_t key;
-		if (pset_iterate(rd_set, &pi, &key)) {
-			if (!vbpt_log_ws_key_exists(log2_wr, key))
-				return true;
-		} else break;
+	for (unsigned i=0; i<depth1; i++) {
+		pset_t *rd_set = &log1_rd->rd_set;
+		pset_iter_t pi;
+		pset_iter_init(rd_set, &pi);
+		while (true) {
+			ul_t key;
+			if (pset_iterate(rd_set, &pi, &key)) {
+				if (!vbpt_log_ws_key_exists(log2_wr, key, depth2))
+					return true;
+			} else break;
+		}
+		vbpt_log_t *log1_rd = vbpt_log_parent(log1_rd);
+		assert(log1_rd != NULL);
 	}
 	return false;
 }
 
 void
-vbpt_log_replay(vbpt_tree_t *tree, vbpt_log_t *log)
+vbpt_log_replay__(vbpt_tree_t *tree, vbpt_log_t *log)
 {
 	if (vbpt_log_wr_size(log) == 0)
 		return;
@@ -208,5 +244,20 @@ vbpt_log_replay(vbpt_tree_t *tree, vbpt_log_t *log)
 				vbpt_txtree_delete(tree, key, NULL);
 		} else
 			break;
+	}
+}
+
+void
+vbpt_log_replay(vbpt_tree_t *tree, vbpt_log_t *log, unsigned depth)
+{
+	vbpt_log_t *logs[depth];
+	for (unsigned i=0; i<depth; i++) {
+		assert(log != NULL);
+		logs[i] = log;
+		log = vbpt_log_parent(log);
+	}
+
+	for (unsigned i = depth-1; i<depth; i--) { // NB: backwards
+		vbpt_log_replay__(tree, logs[i]);
 	}
 }

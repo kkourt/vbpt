@@ -35,14 +35,14 @@ void vbpt_log_dealloc(vbpt_log_t *log); // deallocate a log (pairs with _alloc)
 //  that always returns true is correct.
 
 // read set (rs) checks
-bool vbpt_log_rs_key_exists(vbpt_log_t *log, uint64_t key);
-bool vbpt_log_rs_range_exists(vbpt_log_t *log, vbpt_range_t *r);
+bool vbpt_log_rs_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth);
+bool vbpt_log_rs_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth);
 // write set (ws) checks
-bool vbpt_log_ws_key_exists(vbpt_log_t *log, uint64_t key);
-bool vbpt_log_ws_range_exists(vbpt_log_t *log, vbpt_range_t *r);
+bool vbpt_log_ws_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth);
+bool vbpt_log_ws_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth);
 // delete set (ds) checks
-bool vbpt_log_ds_key_exists(vbpt_log_t *log, uint64_t key);
-bool vbpt_log_ds_range_exists(vbpt_log_t *log, vbpt_range_t *r);
+bool vbpt_log_ds_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth);
+bool vbpt_log_ds_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth);
 
 void vbpt_log_dealloc(vbpt_log_t *log);
 
@@ -50,7 +50,8 @@ void vbpt_log_dealloc(vbpt_log_t *log);
  * high-level operations
  */
 
-bool vbpt_log_conflict(vbpt_log_t *log1_rd, vbpt_log_t *log2_wr);
+bool vbpt_log_conflict(vbpt_log_t *log1_rd, unsigned depth1,
+                       vbpt_log_t *log2_wr, unsigned depth2);
 
 /**
  * txtree: transactional operations on trees
@@ -62,8 +63,9 @@ bool vbpt_log_conflict(vbpt_log_t *log1_rd, vbpt_log_t *log2_wr);
 static inline vbpt_log_t *
 vbpt_txtree_getlog(vbpt_tree_t *t)
 {
-	return &t->ver->log;
+	return &t->ver->v_log;
 }
+
 
 /**
  * branch off a new version of a tree from @t and return it
@@ -98,7 +100,7 @@ vbpt_txtree_delete(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t **o)
 	vbpt_delete(t, k, o);
 }
 
-void vbpt_log_replay(vbpt_tree_t *txt, vbpt_log_t *log);
+void vbpt_log_replay(vbpt_tree_t *txt, vbpt_log_t *log, unsigned log_depth);
 
 #include "vbpt_log_internal.h"
 
