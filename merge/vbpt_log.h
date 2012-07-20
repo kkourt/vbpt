@@ -8,14 +8,14 @@
 
 // interface
 
-struct vbpt_log;
 typedef struct vbpt_log vbpt_log_t;
 
 /*
  * log operations
  */
 
-vbpt_log_t *vbpt_log_alloc(void);
+void vbpt_log_init(vbpt_log_t *log); // initialize log
+vbpt_log_t *vbpt_log_alloc(void);    // alocate and initialize log
 
 // record operations on the tree
 void vbpt_log_write(vbpt_log_t *log, uint64_t key, vbpt_leaf_t *leaf);
@@ -24,6 +24,9 @@ void vbpt_log_delete(vbpt_log_t *log, uint64_t key);
 
 // finalize the log -- only queries can be performed after that
 void vbpt_log_finalize(vbpt_log_t *log);
+
+void vbpt_log_destroy(vbpt_log_t *log); // destroy a log (pairs with _init)
+void vbpt_log_dealloc(vbpt_log_t *log); // deallocate a log (pairs with _alloc)
 
 // query the log:
 //  to allow for different implementations for the logs, we specify that query
@@ -49,83 +52,54 @@ void vbpt_log_dealloc(vbpt_log_t *log);
 
 bool vbpt_log_conflict(vbpt_log_t *log1_rd, vbpt_log_t *log2_wr);
 
-/*
- * transaction trees (to be)
- *  just a log attached to a tree for now...
+/**
+ * txtree: transactional operations on trees
+ *  The functions are just wrappers that use "hidden" log on version.
+ *  At some point, we might want to move them to a different file, but for now
+ *  they are very simple.
  */
-struct vbpt_txtree {
-	vbpt_log_t     *tx_log;
-	vbpt_tree_t    *tx_tree;
-};
-typedef struct vbpt_txtree vbpt_txtree_t;
 
-static inline vbpt_txtree_t *
-vbpt_txtree_alloc(vbpt_tree_t *tree)
+static inline vbpt_log_t *
+vbpt_txtree_getlog(vbpt_tree_t *t)
 {
-	vbpt_txtree_t *txt = xmalloc(sizeof(vbpt_txtree_t));
-	txt->tx_log = vbpt_log_alloc();
-	txt->tx_tree = vbpt_tree_branch(tree);
-	return txt;
+	return &t->ver->log;
 }
-
-static inline void
-vbpt_txtree_insert(vbpt_txtree_t *tx,  uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o)
-{
-	if (o)
-		vbpt_log_read(tx->tx_log, k);
-	vbpt_log_write(tx->tx_log, k, l);
-	vbpt_insert(tx->tx_tree, k, l, o);
-}
-
-static inline void
-vbpt_txtree_delete(vbpt_txtree_t *tx, uint64_t k, vbpt_leaf_t **o)
-{
-	if (o)
-		vbpt_log_read(tx->tx_log, k);
-	vbpt_log_write(tx->tx_log, k, NULL);
-	vbpt_delete(tx->tx_tree, k, o);
-}
-
-void vbpt_log_replay(vbpt_txtree_t *txt, vbpt_log_t *log);
-
-// implementation details:
-//  We are using a hash set for sets. This has two problems:
-//   - no way to do efficient range checks
-//   - iterating values (e.g., for replay) is O(hash table size)
-//
-//  Judy1 seems like a good ds for something like this, but we don't use it
-//  because it is not trivial to make it persistent. It might make sense to do a
-//  Judy1 implementation to measure the performance hit.
-
-#include "phash.h"
-
-enum {
-	VBPT_LOG_STARTED = 1,
-	VBPT_LOG_FINALIZED,
-};
 
 /**
- * vbpt_log: log for changes in an object
- *  @parent for merging logs together
+ * branch off a new version of a tree from @t and return it
+ *   the log is initialized
  */
-struct vbpt_log {
-	unsigned state;
-	pset_t   rd_set;
-	pset_t   rm_set;
-	phash_t  wr_set;
-	struct vbpt_log *parent;
-};
-
-static inline size_t
-vbpt_log_rd_size(vbpt_log_t *log)
+static inline vbpt_tree_t *
+vbpt_txtree_branch(vbpt_tree_t *t)
 {
-	return pset_elements(&log->rd_set);
+	vbpt_tree_t *ret = vbpt_tree_branch(t);
+	vbpt_log_t *log = vbpt_txtree_getlog(ret);
+	vbpt_log_init(log);
+	return ret;
 }
 
-static inline size_t
-vbpt_log_wr_size(vbpt_log_t *log)
+static inline void
+vbpt_txtree_insert(vbpt_tree_t *t,  uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o)
 {
-	return phash_elements(&log->wr_set);
+	vbpt_log_t *log = vbpt_txtree_getlog(t);
+	if (o)
+		vbpt_log_read(log, k);
+	vbpt_log_write(log, k, l);
+	vbpt_insert(t, k, l, o);
 }
+
+static inline void
+vbpt_txtree_delete(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t **o)
+{
+	vbpt_log_t *log = vbpt_txtree_getlog(t);
+	if (o)
+		vbpt_log_read(log, k);
+	vbpt_log_delete(log, k);
+	vbpt_delete(t, k, o);
+}
+
+void vbpt_log_replay(vbpt_tree_t *txt, vbpt_log_t *log);
+
+#include "vbpt_log_internal.h"
 
 #endif

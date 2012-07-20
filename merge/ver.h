@@ -8,7 +8,13 @@
 #include "container_of.h"
 #include "misc.h"
 
-// versions use two refernce counts:
+// Versions form a tree (partial order) as defined by the ->parent pointer.
+
+// For implementation convenience we add the log to the version, so we need to
+// include the appropriate header
+#include "vbpt_log_internal.h"
+
+// versions maintain two refernce counts:
 //  - v_refcounts: all references to a version:
 //     - from children versions
 //     - from objects pointing to a versions
@@ -17,7 +23,7 @@
 // The latter helps validating merges, not sure if is needed for more than
 // debugging -- i.e., we might be able to make sure that this does not happen by
 // correctly handling transaction nesting. For now, it is defined only for DEBUG
-// setups
+// setups.  It might, also, be usefull for smarter garbage collection
 
 struct ver {
 	struct ver *parent;
@@ -26,6 +32,7 @@ struct ver {
 	refcnt_t   children;
 	size_t     v_id;
 	#endif
+	vbpt_log_t log;
 };
 typedef struct ver ver_t;
 
@@ -51,6 +58,9 @@ ver_init(ver_t *ver)
 	ver->v_id = id++;
 	spin_unlock(lock_ptr);
 	#endif
+
+	// XXX: ugly but useful
+	ver->log.state = VBPT_LOG_UNINITIALIZED;
 }
 
 static inline char *

@@ -48,15 +48,22 @@ pset_range_exists(pset_t *pset, uint64_t key, uint64_t len)
 	return false;
 }
 
+void
+vbpt_log_init(vbpt_log_t *log)
+{
+	assert(log->state == VBPT_LOG_UNINITIALIZED);
+	log->state = VBPT_LOG_STARTED;
+	pset_init(&log->rd_set, 8);
+	pset_init(&log->rm_set, 8);
+	phash_init(&log->wr_set, 8);
+}
+
 vbpt_log_t *
 vbpt_log_alloc(void)
 {
 	vbpt_log_t *ret = xmalloc(sizeof(vbpt_log_t));
-	ret->state = VBPT_LOG_STARTED;
-	ret->parent = NULL;
-	pset_init(&ret->rd_set, 8);
-	pset_init(&ret->rm_set, 8);
-	phash_init(&ret->wr_set, 8);
+	ret->state = VBPT_LOG_UNINITIALIZED;
+	vbpt_log_init(ret);
 	return ret;
 }
 
@@ -68,11 +75,17 @@ vbpt_log_finalize(vbpt_log_t *log)
 }
 
 void
-vbpt_log_dealloc(vbpt_log_t *log)
+vbpt_log_destroy(vbpt_log_t *log)
 {
 	assert(log->state == VBPT_LOG_FINALIZED);
 	pset_tfree(&log->rd_set);
 	phash_tfree(&log->wr_set);
+}
+
+void
+vbpt_log_dealloc(vbpt_log_t *log)
+{
+	vbpt_log_destroy(log);
 	free(log);
 }
 
@@ -175,7 +188,7 @@ vbpt_log_conflict(vbpt_log_t *log1_rd, vbpt_log_t *log2_wr)
 }
 
 void
-vbpt_log_replay(vbpt_txtree_t *txt, vbpt_log_t *log)
+vbpt_log_replay(vbpt_tree_t *tree, vbpt_log_t *log)
 {
 	if (vbpt_log_wr_size(log) == 0)
 		return;
@@ -190,9 +203,9 @@ vbpt_log_replay(vbpt_txtree_t *txt, vbpt_log_t *log)
 			vbpt_leaf_t *leaf = (vbpt_leaf_t *)val;
 			assert(leaf == NULL || leaf->l_hdr.type == VBPT_LEAF);
 			if (leaf)
-				vbpt_txtree_insert(txt, key, leaf, NULL);
+				vbpt_txtree_insert(tree, key, leaf, NULL);
 			else
-				vbpt_txtree_delete(txt, key, NULL);
+				vbpt_txtree_delete(tree, key, NULL);
 		} else
 			break;
 	}

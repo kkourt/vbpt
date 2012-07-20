@@ -569,13 +569,16 @@ vbpt_cmp(vbpt_tree_t *t1, vbpt_tree_t *t2)
  * merge @ptree with @gtree -> result in @ptree
  */
 bool
-vbpt_log_merge(vbpt_txtree_t *gtree, vbpt_txtree_t *ptree)
+vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree)
 {
-	if (vbpt_log_conflict(gtree->tx_log, ptree->tx_log)) {
+	vbpt_log_t *g_log = vbpt_txtree_getlog(gtree);
+	vbpt_log_t *p_log = vbpt_txtree_getlog(ptree);
+
+	if (vbpt_log_conflict(g_log, p_log)) {
 		printf("%s => CONFLICT\n", __FUNCTION__);
 		return false;
 	}
-	vbpt_log_replay(ptree, gtree->tx_log);
+	vbpt_log_replay(ptree, g_log);
 	return true;
 }
 
@@ -597,7 +600,7 @@ vbpt_log_merge(vbpt_txtree_t *gtree, vbpt_txtree_t *ptree)
  */
 static inline int
 do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
-        const vbpt_txtree_t *gtree, vbpt_txtree_t *ptree,
+        const vbpt_tree_t *gtree, vbpt_tree_t *ptree,
         ver_t *gv, ver_t  *pv, uint16_t g_dist, uint16_t p_dist, ver_t *jv)
 {
 	assert(vbpt_range_eq(&gc->range, &pc->range));
@@ -607,8 +610,8 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	dmsg("\n\trange: %4lu,+%3lu\n\tgc_v:%s\n\tpc_v:%s\n",
 	      gc->range.key, gc->range.len, ver_str(gc_v), ver_str(pc_v));
 	#endif
-	vbpt_log_t *plog = ptree->tx_log;
-	vbpt_log_t *glog = gtree->tx_log;
+	vbpt_log_t *plog = vbpt_txtree_getlog(ptree);
+	vbpt_log_t *glog = vbpt_txtree_getlog((vbpt_tree_t *)gtree);
 	vbpt_range_t *range = &pc->range;
 
 	/*
@@ -763,16 +766,14 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
  * commits only after all of its nested transactions have comitted.
  */
 bool
-vbpt_merge(const vbpt_txtree_t *gtree, vbpt_txtree_t *ptree)
+vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt)
 {
-	vbpt_tree_t *gt = gtree->tx_tree;
-	vbpt_tree_t *pt = ptree->tx_tree;
 	#if defined(XDEBUG_MERGE)
 	//dmsg("Global  "); vbpt_tree_print(gt, true);
 	//dmsg("Private "); vbpt_tree_print(pt, true);
 	#endif
 
-	vbpt_cur_t *gc = vbpt_cur_alloc(gt);
+	vbpt_cur_t *gc = vbpt_cur_alloc((vbpt_tree_t *)gt);
 	vbpt_cur_t *pc = vbpt_cur_alloc(pt);
 	bool merge_ok = true;
 
@@ -791,7 +792,7 @@ vbpt_merge(const vbpt_txtree_t *gtree, vbpt_txtree_t *ptree)
 
 	while (!(vbpt_cur_end(gc) && vbpt_cur_end(pc))) {
 		vbpt_cur_sync(gc, pc);
-		int ret = do_merge(gc, pc, gtree, ptree, gver, pver, g_dist, p_dist, vj);
+		int ret = do_merge(gc, pc, gt, pt, gver, pver, g_dist, p_dist, vj);
 		if (ret == -1) {
 			merge_ok = false;
 			goto end;
@@ -873,13 +874,13 @@ ver_test(void)
 #endif
 
 static void
-vbpt_txtree_insert_bulk(vbpt_txtree_t *txt, uint64_t *ins, uint64_t ins_len)
+vbpt_txtree_insert_bulk(vbpt_tree_t *tree, uint64_t *ins, uint64_t ins_len)
 {
-	ver_t *ver = txt->tx_tree->ver;
+	ver_t *ver = tree->ver;
 	for (uint64_t i=0; i<ins_len; i++) {
 		uint64_t key = ins[i];
 		vbpt_leaf_t *leaf = vbpt_leaf_alloc(VBPT_LEAF_SIZE, ver);
-		vbpt_txtree_insert(txt, key, leaf, NULL);
+		vbpt_txtree_insert(tree, key, leaf, NULL);
 	}
 }
 
@@ -909,16 +910,16 @@ vbpt_merge_test(vbpt_tree_t *t,
 {
 	tsc_t tsc;
 
-	vbpt_txtree_t *txt1 = vbpt_txtree_alloc(t);
+	vbpt_tree_t *txt1 = vbpt_txtree_branch(t);
 	vbpt_txtree_insert_bulk(txt1, ins1, ins1_len);
 
-	vbpt_txtree_t *txt2_a = vbpt_txtree_alloc(t);
+	vbpt_tree_t *txt2_a = vbpt_txtree_branch(t);
 
 	tsc_init(&tsc); tsc_start(&tsc);
 	vbpt_txtree_insert_bulk(txt2_a, ins2, ins2_len);
 	tsc_pause(&tsc); uint64_t t_ins2_a = tsc_getticks(&tsc);
 
-	vbpt_txtree_t *txt2_b = vbpt_txtree_alloc(t);
+	vbpt_tree_t *txt2_b = vbpt_txtree_branch(t);
 
 	tsc_init(&tsc); tsc_start(&tsc);
 	vbpt_txtree_insert_bulk(txt2_b, ins2, ins2_len);
@@ -926,8 +927,8 @@ vbpt_merge_test(vbpt_tree_t *t,
 
 	#if 0
 	dmsg("PARENT: "); vbpt_tree_print(t, true);
-	dmsg("T1:     "); vbpt_tree_print(txt1->tx_tree, true);
-	dmsg("T2:     "); vbpt_tree_print(txt2_a->tx_tree, true);
+	dmsg("T1:     "); vbpt_tree_print(txt1, true);
+	dmsg("T2:     "); vbpt_tree_print(txt2_a, true);
 	#endif
 
 	tsc_init(&tsc); tsc_start(&tsc);
@@ -956,7 +957,7 @@ vbpt_merge_test(vbpt_tree_t *t,
 
 		case 3:
 		//printf("Both merges succeeded\n");
-		if (!vbpt_cmp(txt2_a->tx_tree, txt2_b->tx_tree)) {
+		if (!vbpt_cmp(txt2_a, txt2_b)) {
 			printf("======> Resulting trees are not the same\n");
 			err = 1;
 		}
@@ -973,8 +974,8 @@ vbpt_merge_test(vbpt_tree_t *t,
 		printf("INS1     : "); print_arr(ins1, ins1_len);
 		printf("INS2     : "); print_arr(ins2, ins2_len);
 		printf("\n");
-		printf("LOG MERGE: "); vbpt_tree_print(txt2_a->tx_tree, true);
-		printf("BPT MERGE: "); vbpt_tree_print(txt2_b->tx_tree, true);
+		printf("LOG MERGE: "); vbpt_tree_print(txt2_a, true);
+		printf("BPT MERGE: "); vbpt_tree_print(txt2_b, true);
 	}
 
 	if (err)
