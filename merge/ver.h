@@ -34,8 +34,8 @@ static void
 ver_init(ver_t *ver)
 {
 	#ifndef NDEBUG
-	/* XXX note that for this to work properly cases this function can't be
-	 * in a hder file -- move it to ver.c */
+	/* XXX note that for this to work properly this function can't be in a
+	 * header file -- move it to ver.c */
 	static size_t id = 0;
 	spinlock_t *lock_ptr = NULL;
 	spinlock_t lock;

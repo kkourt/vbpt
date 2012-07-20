@@ -5,6 +5,7 @@
 #include "vbpt_log.h"
 
 #include "misc.h"
+#include "tsc.h"
 
 #define VBPT_KEY_MAX UINT64_MAX
 
@@ -12,6 +13,11 @@
 
 // forward declaration
 static inline void vbpt_cur_maybe_delete(vbpt_cur_t *c);
+
+/**
+ * IDEAS:
+ *  - Insert NULL for deletions
+ */
 
 /**
  * Cursors:
@@ -901,14 +907,22 @@ vbpt_merge_test(vbpt_tree_t *t,
                uint64_t *ins1, uint64_t ins1_len,
 	       uint64_t *ins2, uint64_t ins2_len)
 {
+	tsc_t tsc;
+
 	vbpt_txtree_t *txt1 = vbpt_txtree_alloc(t);
 	vbpt_txtree_insert_bulk(txt1, ins1, ins1_len);
 
 	vbpt_txtree_t *txt2_a = vbpt_txtree_alloc(t);
+
+	tsc_init(&tsc); tsc_start(&tsc);
 	vbpt_txtree_insert_bulk(txt2_a, ins2, ins2_len);
+	tsc_pause(&tsc); uint64_t t_ins2_a = tsc_getticks(&tsc);
 
 	vbpt_txtree_t *txt2_b = vbpt_txtree_alloc(t);
+
+	tsc_init(&tsc); tsc_start(&tsc);
 	vbpt_txtree_insert_bulk(txt2_b, ins2, ins2_len);
+	tsc_pause(&tsc); uint64_t t_ins2_b = tsc_getticks(&tsc);
 
 	#if 0
 	dmsg("PARENT: "); vbpt_tree_print(t, true);
@@ -916,8 +930,13 @@ vbpt_merge_test(vbpt_tree_t *t,
 	dmsg("T2:     "); vbpt_tree_print(txt2_a->tx_tree, true);
 	#endif
 
+	tsc_init(&tsc); tsc_start(&tsc);
 	unsigned log_ret = vbpt_log_merge(txt1, txt2_a);
+	tsc_pause(&tsc); uint64_t t_merge_log = tsc_getticks(&tsc);
+
+	tsc_init(&tsc); tsc_start(&tsc);
 	unsigned mer_ret = vbpt_merge(txt1, txt2_b);
+	tsc_pause(&tsc); uint64_t t_merge_vbpt = tsc_getticks(&tsc);
 
 	bool success = false;
 	int err = 0;
@@ -960,6 +979,15 @@ vbpt_merge_test(vbpt_tree_t *t,
 
 	if (err)
 		assert(false);
+
+	if (success) {
+		printf("----\n");
+		printf("t_ins2_a:     %5lu (%0.3lf)\n", t_ins2_a,     ((double)t_ins2_a / (double)t_ins2_a)    );
+		printf("t_ins2_b:     %5lu (%0.3lf)\n", t_ins2_b,     ((double)t_ins2_a / (double)t_ins2_b)    );
+		printf("t_merge_log:  %5lu (%0.3lf)\n", t_merge_log,  ((double)t_ins2_a / (double)t_merge_log) );
+		printf("t_merge_vbpt: %5lu (%0.3lf)\n", t_merge_vbpt, ((double)t_ins2_a / (double)t_merge_vbpt));
+		printf("----\n");
+	}
 
 	return success;
 }
@@ -1042,14 +1070,14 @@ int main(int argc, const char *argv[])
 	//test1();
 	//test2();
 	#if 1
-	struct dist_desc d0 = { .r_start =   0, .r_len =1024, .nr = 512,  .seed = 0, .data = NULL};
-	struct dist_desc d1 = { .r_start =   0, .r_len = 512, .nr =   16, .seed = 0, .data = NULL};
-	struct dist_desc d2 = { .r_start = 512, .r_len = 512, .nr =   16, .seed = 0, .data = NULL};
+	struct dist_desc d0 = { .r_start =   0, .r_len =16384, .nr = 1024,  .seed = 0, .data = NULL};
+	struct dist_desc d1 = { .r_start =   0, .r_len = 128, .nr =   16, .seed = 0, .data = NULL};
+	struct dist_desc d2 = { .r_start =   4096, .r_len = 128, .nr =  16, .seed = 0, .data = NULL};
 
 	unsigned count=0, successes=0;
-	for (unsigned i=0; i<32; i++)
-		for (unsigned j=0; j<32; j++)
-			for (unsigned k=0; j<32; j++) {
+	for (unsigned i=0; i<128; i++)
+		for (unsigned j=0; j<128; j++)
+			for (unsigned k=0; j<128; j++) {
 				d0.seed = i;
 				d1.seed = j;
 				d2.seed = k;

@@ -1,7 +1,7 @@
 .PHONY: all clean
 
 CC=gcc
-CFLAGS=-Wall -O2  -g  -D_GNU_SOURCE -I. -std=c99 #-fprofile-arcs -ftest-coverage
+CFLAGS=-Wall -O2 -g -D_GNU_SOURCE -I. -std=c99 #-fprofile-arcs -ftest-coverage
 LIBS=-lpthread
 hdrs=$(wildcard *.h)
 
