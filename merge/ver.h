@@ -14,51 +14,83 @@
 // include the appropriate header
 #include "vbpt_log_internal.h"
 
-// versions maintain two refernce counts:
-//  - v_refcounts: all references to a version:
-//     - from children versions
-//     - from objects pointing to a versions
-//  - children: references only from other versions
-//
-// The latter helps validating merges, not sure if is needed for more than
-// debugging -- i.e., we might be able to make sure that this does not happen by
-// correctly handling transaction nesting. For now, it is defined only for DEBUG
-// setups.  It might, also, be usefull for smarter garbage collection
+/**
+ * Garbage collecting versions
+ *
+ * versions are referenced by:
+ *  - other versions (ver_t's ->parent)
+ *  - trees          (vbpt_tree_t's ->ver)
+ *  - tree nodes     (vbpt_hdr_t's ->ver)
+ *
+ *     ...
+ *      |
+ *      o
+ *      |
+ *      o Vj
+ *      |\
+ *      . .
+ *      .  .
+ *      .   .
+ *      |    \
+ *   Vg o     o Vp
+ *
+ * Since children point to parents, we can't use typical reference counting --
+ * reference counts will not reach zero. Instead, we need to collect versions
+ * which form a chain that reaches the end (NULL) and all refcounts are 1.
+ *
+ * To implement the merge operation we need to query the partial order of
+ * versions. As an optimization, we only check until the Vj (i.e., we only
+ * traverse the Vg->Vj paths and Vp->Vj paths), and if we don't find the version
+ * we are looking for, we assume that it is before Vj (see ver_join() and
+ * ver_leq_limit()).
+ *
+ * One (i.e., me in several different occasions) might think that this enable us
+ * to not count references from nodes.  However, this is not the case. The
+ * problem is that if a node points to a version (vx) that is free()d, it is
+ * possible that a new version (vy) will be allocated on the same address, which
+ * means that nodes with version vx, will be mistakely assumed to be nodes with
+ * version vy.  One solution would be to "version" the versions with a unique
+ * identifier, and add it to the node references, so that we can quickly check
+ * if this a version that was reallocated.
+ *
+ * Instead, we use two reference counts: one for keeping a version to the
+ * version tree (rfcnt_children), and one for reclaiming the version
+ * (rfcnt_hdrs).  We use rfcnt_children to remove a version from the tree, and
+ * rfcnt_hdrs to reclaim the version (if rfcnt_children == 0). Reming eagerly
+ * the version from the tree avoids having to search long version chains.
+ * structures that maintain blessed versions (e.g., mtree) should grab a
+ * children reference.
+ *
+ * To avoid keeping old versions around for too long, we could change the
+ * versions of the nodes to point to newer versions. This would probably need to
+ * maintain two reference counts: one for nodes, and one for parents/trees.
+ * Additionally, this would be easier if we set ->ver == NULL for nodes that
+ * have the same version as their parent.
+ */
 
 struct ver {
 	struct ver *parent;
-	refcnt_t   v_refcnt;
+	refcnt_t   rfcnt_children;
+	refcnt_t   rfcnt_hdrs;
 	#ifndef NDEBUG
-	refcnt_t   children;
 	size_t     v_id;
 	#endif
 	vbpt_log_t v_log;
 };
 typedef struct ver ver_t;
 
+#define VER_PARENT_UNLINKED ((ver_t *)0xdeaddad)
 
-static void
+void ver_debug_init(ver_t *ver);
+
+static inline void
 ver_init(ver_t *ver)
 {
+	refcnt_init(&ver->rfcnt_hdrs, 1);
+	refcnt_init(&ver->rfcnt_children, 0);
 	#ifndef NDEBUG
-	/* XXX note that for this to work properly this function can't be in a
-	 * header file -- move it to ver.c */
-	static size_t id = 0;
-	spinlock_t *lock_ptr = NULL;
-	spinlock_t lock;
+	ver_debug_init(ver);
 	#endif
-	refcnt_init(&ver->v_refcnt, 1);
-	#ifndef NDEBUG
-	refcnt_init(&ver->children, 0);
-	if (lock_ptr == NULL) { // XXX: race
-		spinlock_init(&lock);
-		lock_ptr = &lock;
-	}
-	spin_lock(lock_ptr);
-	ver->v_id = id++;
-	spin_unlock(lock_ptr);
-	#endif
-
 	// XXX: ugly but useful
 	ver->v_log.state = VBPT_LOG_UNINITIALIZED;
 }
@@ -72,11 +104,11 @@ ver_str(ver_t *ver)
 	static char buff_arr[VERSTR_BUFFS_NR][VERSTR_BUFF_SIZE];
 	char *buff = buff_arr[i++ % VERSTR_BUFFS_NR];
 	#ifndef NDEBUG
-	snprintf(buff, VERSTR_BUFF_SIZE, " [%p: ver:%3zd ch:%3u cnt:%3u] ",
+	snprintf(buff, VERSTR_BUFF_SIZE, " [%p: ver:%3zd rfcnt_children:%3u rfcnt_hdrs:%3u] ",
 		 ver,
 	         ver->v_id,
-		 refcnt_get(&ver->children),
-		 refcnt_get(&ver->v_refcnt));
+		 refcnt_get(&ver->rfcnt_children),
+		 refcnt_get(&ver->rfcnt_hdrs));
 	#else
 	snprintf(buff, VERSTR_BUFF_SIZE, " (ver:%p ) ", ver);
 	#endif
@@ -94,48 +126,42 @@ ver_path_print(ver_t *v, FILE *fp)
 }
 
 static inline ver_t *
-refcnt2ver(refcnt_t *rcnt)
+refcnt_nodes2ver(refcnt_t *rcnt)
 {
-	return container_of(rcnt, ver_t, v_refcnt);
+	return container_of(rcnt, ver_t, rfcnt_hdrs);
 }
 
-/* get a reference of ver -- i.e., increase reference count */
+/* get a reference of @ver for a node */
 static inline ver_t *
-ver_getref(ver_t *ver)
+ver_getref_hdr(ver_t *ver)
 {
-	refcnt_inc(&ver->v_refcnt);
+	refcnt_inc(&ver->rfcnt_hdrs);
 	return ver;
 }
 
 static void ver_release(refcnt_t *);
 
 /**
- * release reference -- decrease reference count
+ * release a node reference
  */
 static inline void
-ver_putref(ver_t *ver)
+ver_putref_hdr(ver_t *ver)
 {
-	refcnt_dec(&ver->v_refcnt, ver_release);
+	refcnt_dec(&ver->rfcnt_hdrs, ver_release);
 }
 
 
 /**
  * release a version
- *  decrements reference count of parent
  */
 static void
 ver_release(refcnt_t *refcnt)
 {
-	ver_t *ver = refcnt2ver(refcnt);
-	#ifndef NDDEBUG
-	assert(refcnt_get(&ver->children) == 0);
-	#endif
-	if (ver->parent) {
-		#ifndef NDEBUG
-		refcnt_dec__(&ver->parent->children);
-		#endif
-		ver_putref(ver->parent);
-	}
+	ver_t *ver = refcnt_nodes2ver(refcnt);
+	assert(refcnt_get(&ver->rfcnt_children) == 0 &&
+	       "I don't think this is supposed to happen");
+	assert(ver->parent == VER_PARENT_UNLINKED &&
+	       "I don't think this is supposed to happen");
 	free(ver);
 }
 
@@ -149,13 +175,86 @@ ver_create(void)
 	return ret;
 }
 
+/**
+ * garbage collect the tree from @ver's parent and above
+ *  Find the longer chain that ends at NULL and all nodes have a rfcnt_children
+ *  of 1. This chain can be detached from the version tree.
+ */
+static void
+ver_tree_gc(ver_t *ver)
+{
+	ver_t *ver_p = ver->parent;
+	while (true) {
+		// we reached the end, garbage collect
+		if (ver_p == NULL) {
+			break;
+		} else if (refcnt_get(&ver_p->rfcnt_children) > 1) {
+			ver = ver_p;
+		}
+		ver_p = ver_p->parent;
+	}
+
+	#ifndef NDEBUG
+	ver_t *v = ver->parent;
+	while (v != NULL) {
+		ver_t *tmp = v->parent;
+		v->parent = VER_PARENT_UNLINKED;
+		v = tmp;
+	}
+	#endif
+	// this is the new top
+	ver->parent = NULL;
+}
+
+/**
+ * getting a reference for setting a blessed pointer increases the
+ * rfcnt_children, so we need a separate wrapper
+ */
+static inline ver_t *
+ver_getref_blessed(ver_t *ver)
+{
+	assert(refcnt_get(&ver->rfcnt_children) == 0);
+	refcnt_inc__(&ver->rfcnt_children);
+	return ver;
+}
+
+/**
+ * return a reference (@old_bl) that was acquired with ver_getref_blessed() and
+ * perform garbage collection after the new version @new_bl.
+ */
+static inline void
+ver_putref_blessed(ver_t *new_bl, ver_t *old_bl)
+{
+	refcnt_dec__(&old_bl->rfcnt_children);
+	ver_tree_gc(new_bl);
+}
+
+
+/**
+ * set parent without checking for previous parent
+ */
 static inline void
 ver_setparent__(ver_t *v, ver_t *parent)
 {
-	#ifndef NDEBUG
-	refcnt_inc__(&parent->children);
-	#endif
-	v->parent = ver_getref(parent);
+	refcnt_inc__(&parent->rfcnt_children); // do not check if it's zero
+	v->parent = parent;
+}
+
+/**
+ * set a parent to a version.
+ *  If previous parent is not NULL, refcount will be decreased
+ *  Will get a new referece of @new_parent
+ *
+ *  This should be used to rebase a version
+ */
+static inline void
+ver_setparent(ver_t *ver, ver_t *new_parent)
+{
+	if (ver->parent) {
+		refcnt_dec__(&(ver->parent->rfcnt_children));
+		ver_tree_gc(ver);
+	}
+	ver_setparent__(ver, new_parent);
 }
 
 /* branch (i.e., fork) a version */
@@ -214,42 +313,9 @@ ver_leq_limit(ver_t *v1, ver_t *v2, uint16_t max_distance)
 #define VER_JOIN_FAIL ((ver_t *)(~((uintptr_t)0)))
 #define VER_JOIN_LIMIT 3
 
-/**
- * see ver_join()
- *
- * We can avoid the O(n^2) thing by keeping a hash table for all the versions on
- * the global path, so that we can iterate the pver path and check membership.
- */
-static ver_t *
+ver_t *
 ver_join_slow(ver_t *gver, ver_t *pver, ver_t **prev_pver,
-              uint16_t *gdist, uint16_t *pdist)
-{
-	ver_t *gv = gver;
-	for (unsigned gv_i = 0; gv_i < VER_JOIN_LIMIT; gv_i++) {
-		ver_t *pv = pver;
-		for (unsigned pv_i=0 ; pv_i < VER_JOIN_LIMIT; pv_i++) {
-			if (pv->parent == gv->parent) {
-				if (prev_pver)
-					*prev_pver = pv;
-				assert(pv->parent != NULL);
-				*gdist = gv_i + 1;
-				*pdist = pv_i + 1;
-				return pv->parent;
-			}
-
-			if ((pv = pv->parent) == NULL)
-				break;
-		}
-		if ((gv = gv->parent) == NULL)
-			break;
-	}
-
-	// gdist, pdist won't get used if VER_JOIN_FAIL is returned, but the
-	// compiler can't seem to be able to figure that out and complains about
-	// uninitialized values
-	*gdist = *pdist = ~0;
-	return VER_JOIN_FAIL;
-}
+              uint16_t *gdist, uint16_t *pdist);
 
 /**
  * find the join point (largest common ancestor) of two versions
@@ -305,32 +371,18 @@ ver_join(ver_t *gver, ver_t *pver, ver_t **prev_v, uint16_t *gdist, uint16_t *pd
 static inline bool
 ver_chain_has_branch(ver_t *tail, ver_t *head)
 {
-#ifndef NDEBUG
 	ver_t *v = tail;
 	while (true) {
-		if (refcnt_get(&v->children) > 1)
+		if (refcnt_get(&v->rfcnt_children) > 1)
 			return true;
 		if (v == head)
 			break;
 		assert(v != NULL);
 		v = v->parent;
 	}
-#endif
 	return false;
 }
 
-/**
- * set a parent to a version.
- *  If previous parent is not NULL, refcount will be decreased
- *  Will get a new referece of @new_parent
- */
-static inline void
-ver_setparent(ver_t *ver, ver_t *new_parent)
-{
-	if (ver->parent)
-		ver_putref(ver->parent);
-	ver_setparent__(ver, new_parent);
-}
 
 static inline ver_t *
 ver_parent(ver_t *ver)

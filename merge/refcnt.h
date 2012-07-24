@@ -49,12 +49,14 @@ refcnt_inc__(refcnt_t *rcnt)
 	spin_unlock(&rcnt->lock);
 }
 
-static inline void
+static inline uint32_t
 refcnt_dec__(refcnt_t *rcnt)
 {
+	uint32_t ret;
 	spin_lock(&rcnt->lock);
-	rcnt->cnt--;
+	ret = --rcnt->cnt;
 	spin_unlock(&rcnt->lock);
+	return ret;
 }
 
 static inline void
