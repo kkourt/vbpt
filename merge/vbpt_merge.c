@@ -811,7 +811,7 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt)
 	}
 	/* success: fix version tree */
 	assert(!ver_chain_has_branch(pver, hpver));
-	ver_setparent(hpver, gver);
+	ver_rebase(hpver, gver);
 end:
 	vbpt_cur_free(gc);
 	vbpt_cur_free(pc);

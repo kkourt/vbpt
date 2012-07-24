@@ -37,6 +37,18 @@ refcnt_get(refcnt_t *rcnt)
 	return ret;
 }
 
+static inline bool
+refcnt_try_get(refcnt_t *rcnt, uint32_t *cnt)
+{
+	bool ret = false;
+	if (spin_try_lock(&rcnt->lock)) {
+		*cnt = rcnt->cnt;
+		ret = true;
+		spin_unlock(&rcnt->lock);
+	}
+	return ret;
+}
+
 /*
  * refcnt_{inc,dec}__ just perform the atomic operations
  */

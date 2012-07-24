@@ -4,12 +4,43 @@
 /* various helpers */
 
 #if defined(__linux__)
-	#include <pthread.h>
 	/* pthread spinlock wrappers */
+
+	#include <stdbool.h>
+	#include <pthread.h>
+	#include <errno.h> /* EBUSY */
 	#define spinlock_t       pthread_spinlock_t
-	#define spinlock_init(x) pthread_spin_init(x, 0)
-	#define spin_lock(x)     pthread_spin_lock(x)
-	#define spin_unlock(x)   pthread_spin_unlock(x)
+
+	static inline void
+	spinlock_init(spinlock_t *lock)
+	{
+		int err = pthread_spin_init(lock, 0);
+		assert(!err);
+	}
+
+	static inline void
+	spin_lock(spinlock_t *lock)
+	{
+		int err = pthread_spin_lock(lock);
+		assert(!err);
+	}
+
+	static inline void
+	spin_unlock(spinlock_t *lock)
+	{
+		int err = pthread_spin_unlock(lock);
+		assert(!err);
+	}
+
+	static inline bool
+	spin_try_lock(spinlock_t *lock)
+	{
+		int err = pthread_spin_trylock(lock);
+		if (err == EBUSY)
+			return false;
+		assert(!err);
+		return true;
+	}
 #elif defined(__APPLE__)
 	#include <libkern/OSAtomic.h>
 	#define spinlock_t OSSpinLock

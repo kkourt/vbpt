@@ -9,9 +9,13 @@
 #include "misc.h"
 
 // Versions form a tree (partial order) as defined by the ->parent pointer.
+// This partial order is queried when performing a merge operations.
 
-// For implementation convenience we add the log to the version, so we need to
-// include the appropriate header
+// We use a ->parent pointer to track the partial order to enable for
+// concurrency
+
+// For implementation convenience we add the operation log to the version, so we
+// need to include the appropriate header
 #include "vbpt_log_internal.h"
 
 /**
@@ -36,36 +40,87 @@
  *
  * Since children point to parents, we can't use typical reference counting --
  * reference counts will not reach zero. Instead, we need to collect versions
- * which form a chain that reaches the end (NULL) and all refcounts are 1.
+ * which form a chain that reaches the end (NULL) and all refcounts in the chain
+ * are 1.
  *
- * To implement the merge operation we need to query the partial order of
- * versions. As an optimization, we only check until the Vj (i.e., we only
- * traverse the Vg->Vj paths and Vp->Vj paths), and if we don't find the version
- * we are looking for, we assume that it is before Vj (see ver_join() and
- * ver_leq_limit()).
+ * The above is enabled by the way we query the partial order when doing merges.
+ * As an optimization, we only check until the Vj (i.e., we only traverse the
+ * Vg->Vj paths and Vp->Vj paths), and if we don't find the version we are
+ * looking for, we assume that it is before Vj (see ver_join() and
+ * ver_leq_limit()). So, if no branches exist in a chain that reaches NULL, we
+ * know that the nodes in the chain won't be traversed by the partial order
+ * queries -- i.e., they can be removed by the tree. We term versions that
+ * are not going to be traversed by the partial order queries stale versions.
  *
  * One (i.e., me in several different occasions) might think that this enable us
  * to not count references from nodes.  However, this is not the case. The
  * problem is that if a node points to a version (vx) that is free()d, it is
  * possible that a new version (vy) will be allocated on the same address, which
  * means that nodes with version vx, will be mistakely assumed to be nodes with
- * version vy.  One solution would be to "version" the versions with a unique
- * identifier, and add it to the node references, so that we can quickly check
- * if this a version that was reallocated.
+ * version vy. So, we can remove stale versions from the tree, but we can't
+ * deallocate them, because they are still referenced in individual nodes of the
+ * tree.
+ *
+ * A possible solution would be to "version" the versions with a unique
+ * identifier, and add it to the version node references, so that we can quickly
+ * check if this a version that was reallocated. We do not follow this approach.
  *
  * Instead, we use two reference counts: one for keeping a version to the
  * version tree (rfcnt_children), and one for reclaiming the version
- * (rfcnt_hdrs).  We use rfcnt_children to remove a version from the tree, and
- * rfcnt_hdrs to reclaim the version (if rfcnt_children == 0). Reming eagerly
- * the version from the tree avoids having to search long version chains.
- * structures that maintain blessed versions (e.g., mtree) should grab a
- * children reference.
+ * (rfcnt_hdrs). We use rfcnt_children to remove a version from the tree, and
+ * rfcnt_hdrs to reclaim the version. Reming versions eagerly from the tree
+ * avoids having to search long version chains.
  *
- * To avoid keeping old versions around for too long, we could change the
- * versions of the nodes to point to newer versions. This would probably need to
- * maintain two reference counts: one for nodes, and one for parents/trees.
- * Additionally, this would be easier if we set ->ver == NULL for nodes that
- * have the same version as their parent.
+ * Finally, we need to ensure that no user will try to branch off a new version
+ * from stale versions. To achieve this property, we let the user define a
+ * frontier above which it is guaranteed that no new version will be branched.
+ * This frontier is defined by "pinning" versions. IOW, when a user pins a
+ * version using ver_pin() it is guaranteed that no version reachable via the
+ * ->parent pointer of the pinned version will be used as a branch point.
+ *
+ * The typical scenario for this is when the user maintains a "blessed" version,
+ * and all branches happen on this version (or in the case of nesting, one one
+ * of its * children).
+ *
+ * There are two possible implementations for pinning a version:
+ *
+ *  1. We can just run ver_tree_gc() when a version is pinned, but we need to
+ *     make sure that no other ver_tree_gc() instance will run starting from an
+ *     ancestor of the pinned version.
+ *
+ *  2. If we can't guarantee the above property, we can increase the
+ *     rfcnt_children for the pinned version, so that it won't dissapear by
+ *     another run of the garbage collector. This might be usefull, for example,
+ *     if we want to run the collector after a rebase(). Obviously, we also need
+ *     to make sure that the rfcnt_children is decreased for the previous pinned
+ *     version.
+ *
+ * For now, we follow the first approach.
+ *
+ * To avoid keeping old versions around for too long, we could apply another
+ * optimization where we update stale version references to the pinned version.
+ * We could for example, keep a set of stale versions and check against it when
+ * iterating the tree. Another possible optimization would be to  set ->ver ==
+ * NULL for nodes that have the same version as their parent on the tree.
+ */
+
+/**
+ * Interface overview
+ *
+ * ver_create(): create a new version out of nothing
+ * ver_branch(): branch a version from another version
+ *
+ * ver_getref(): get a version reference
+ * ver_putref(): put a version reference
+ *
+ * ver_rebase(): change parent
+ *
+ * ver_pin():    pin a version
+ *
+ * ver_eq()       : check two versions for equality
+ * ver_leq_limit(): query partial order
+ * ver_join()     : find join point
+ *
  */
 
 struct ver {
@@ -84,7 +139,7 @@ typedef struct ver ver_t;
 void ver_debug_init(ver_t *ver);
 
 static inline void
-ver_init(ver_t *ver)
+ver_init__(ver_t *ver)
 {
 	refcnt_init(&ver->rfcnt_hdrs, 1);
 	refcnt_init(&ver->rfcnt_children, 0);
@@ -131,9 +186,11 @@ refcnt_nodes2ver(refcnt_t *rcnt)
 	return container_of(rcnt, ver_t, rfcnt_hdrs);
 }
 
-/* get a reference of @ver for a node */
+/**
+ * get a node reference
+ */
 static inline ver_t *
-ver_getref_hdr(ver_t *ver)
+ver_getref(ver_t *ver)
 {
 	refcnt_inc(&ver->rfcnt_hdrs);
 	return ver;
@@ -145,7 +202,7 @@ static void ver_release(refcnt_t *);
  * release a node reference
  */
 static inline void
-ver_putref_hdr(ver_t *ver)
+ver_putref(ver_t *ver)
 {
 	refcnt_dec(&ver->rfcnt_hdrs, ver_release);
 }
@@ -165,13 +222,13 @@ ver_release(refcnt_t *refcnt)
 	free(ver);
 }
 
-/* create a version from a versioned object */
+/* create a new version */
 static inline ver_t *
 ver_create(void)
 {
 	ver_t *ret = xmalloc(sizeof(ver_t));
 	ret->parent = NULL;
-	ver_init(ret);
+	ver_init__(ret);
 	return ret;
 }
 
@@ -179,54 +236,57 @@ ver_create(void)
  * garbage collect the tree from @ver's parent and above
  *  Find the longer chain that ends at NULL and all nodes have a rfcnt_children
  *  of 1. This chain can be detached from the version tree.
+ *
+ * To avoid having to serialize collection, this funcion is reentrant.
  */
 static void
 ver_tree_gc(ver_t *ver)
 {
 	ver_t *ver_p = ver->parent;
 	while (true) {
-		// we reached the end, garbage collect
-		if (ver_p == NULL) {
+
+		// reached bottom
+		if (ver_p == NULL)
 			break;
-		} else if (refcnt_get(&ver_p->rfcnt_children) > 1) {
+
+		// try to get a the refcount. If it's not possible somebody else
+		// runs the collector and has the lock, so just bail out.
+		uint32_t children;
+		if (!refcnt_try_get(&ver_p->rfcnt_children, &children))
+			return;
+		assert(children > 0);
+
+		// found a branch, reset the head of the chain
+		if (children > 1)
 			ver = ver_p;
-		}
+
 		ver_p = ver_p->parent;
 	}
 
 	#ifndef NDEBUG
+	// poison ->parent pointers of stale versions
 	ver_t *v = ver->parent;
-	while (v != NULL) {
+	while (v != NULL || v != VER_PARENT_UNLINKED) {
 		ver_t *tmp = v->parent;
 		v->parent = VER_PARENT_UNLINKED;
 		v = tmp;
 	}
 	#endif
-	// this is the new top
+
+	// everything below ver->parent is stale, remove them from the tree
+	// ASSUMPTION: this assignment is atomic.
 	ver->parent = NULL;
 }
 
 /**
- * getting a reference for setting a blessed pointer increases the
- * rfcnt_children, so we need a separate wrapper
- */
-static inline ver_t *
-ver_getref_blessed(ver_t *ver)
-{
-	assert(refcnt_get(&ver->rfcnt_children) == 0);
-	refcnt_inc__(&ver->rfcnt_children);
-	return ver;
-}
-
-/**
- * return a reference (@old_bl) that was acquired with ver_getref_blessed() and
- * perform garbage collection after the new version @new_bl.
+ * pin a version from the tree:
+ *  just run the garbage collector
+ *  See comment at begining of file for details
  */
 static inline void
-ver_putref_blessed(ver_t *new_bl, ver_t *old_bl)
+ver_pin(ver_t *pinned_new, ver_t *pinned_old)
 {
-	refcnt_dec__(&old_bl->rfcnt_children);
-	ver_tree_gc(new_bl);
+	ver_tree_gc(pinned_new);
 }
 
 
@@ -241,18 +301,16 @@ ver_setparent__(ver_t *v, ver_t *parent)
 }
 
 /**
- * set a parent to a version.
+ * rebase: set a new parent to a version.
  *  If previous parent is not NULL, refcount will be decreased
  *  Will get a new referece of @new_parent
- *
- *  This should be used to rebase a version
  */
 static inline void
-ver_setparent(ver_t *ver, ver_t *new_parent)
+ver_rebase(ver_t *ver, ver_t *new_parent)
 {
 	if (ver->parent) {
-		refcnt_dec__(&(ver->parent->rfcnt_children));
-		ver_tree_gc(ver);
+		refcnt_dec__(&ver->parent->rfcnt_children);
+		//ver_tree_gc(ver);
 	}
 	ver_setparent__(ver, new_parent);
 }
@@ -263,7 +321,7 @@ ver_branch(ver_t *parent)
 {
 	/* allocate and initialize new version */
 	ver_t *ret = xmalloc(sizeof(ver_t));
-	ver_init(ret);
+	ver_init__(ret);
 	/* increase the reference count of the parent */
 	ver_setparent__(ret, parent);
 	return ret;

@@ -220,7 +220,7 @@ find_key(vbpt_node_t *node, uint64_t key)
 static void
 vbpt_hdr_init(vbpt_hdr_t *hdr, ver_t *ver, enum vbpt_type type)
 {
-	hdr->ver = ver_getref_hdr(ver);
+	hdr->ver = ver_getref(ver);
 	refcnt_init(&hdr->h_refcnt, 1);
 	hdr->type = type;
 }
@@ -253,7 +253,7 @@ vbpt_node_dealloc(vbpt_node_t *node)
 		vbpt_hdr_putref(kvp[i].val);
 	}
 	node->items_nr = 0;
-	ver_putref_hdr(node->n_hdr.ver);
+	ver_putref(node->n_hdr.ver);
 	free(node);
 }
 
@@ -278,7 +278,7 @@ vbpt_leaf_alloc(size_t leaf_size, ver_t *ver)
 void
 vbpt_leaf_dealloc(vbpt_leaf_t *leaf)
 {
-	ver_putref_hdr(leaf->l_hdr.ver);
+	ver_putref(leaf->l_hdr.ver);
 	free(leaf);
 }
 
@@ -323,7 +323,7 @@ vbpt_tree_branch(vbpt_tree_t *parent)
 void
 vbpt_tree_dealloc(vbpt_tree_t *tree)
 {
-	ver_putref_hdr(tree->ver);
+	ver_putref(tree->ver);
 	if (tree->root != NULL)
 		vbpt_node_putref(tree->root);
 	free(tree);
