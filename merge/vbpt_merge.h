@@ -30,6 +30,15 @@ static inline bool vbpt_cur_null(const vbpt_cur_t *c);
 
 bool vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc);
 
+bool vbpt_cmp(vbpt_tree_t *t1, vbpt_tree_t *t2);
+
+/**
+ * Merging
+ */
+
+bool vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt);
+bool vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree);
+
 /**
  * Implementation
  */

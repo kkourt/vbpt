@@ -107,19 +107,19 @@
 /**
  * Interface overview
  *
- * ver_create(): create a new version out of nothing
- * ver_branch(): branch a version from another version
+ * ver_create():    create a new version out of nothing
+ * ver_branch():    branch a version from another version
  *
- * ver_getref(): get a version reference
- * ver_putref(): put a version reference
+ * ver_getref():    get a version reference
+ * ver_putref():    put a version reference
  *
- * ver_rebase(): change parent
+ * ver_rebase():    change parent
  *
- * ver_pin():    pin a version
+ * ver_pin():       pin a version
  *
- * ver_eq()       : check two versions for equality
+ * ver_eq():        check two versions for equality
  * ver_leq_limit(): query partial order
- * ver_join()     : find join point
+ * ver_join():      find join point
  *
  */
 
@@ -215,8 +215,12 @@ static void
 ver_release(refcnt_t *refcnt)
 {
 	ver_t *ver = refcnt_nodes2ver(refcnt);
-	assert(refcnt_get(&ver->rfcnt_children) == 0 &&
-	       "I don't think this is supposed to happen");
+	// this is special case where a version is no longer references in a
+	// tree, but is a part of the version tree. I think the best solution is
+	// to have the tree grab a reference. Want to test the current gc sceme
+	// before applying this change though, so for know just a warning.
+	if (refcnt_get(&ver->rfcnt_children) != 0)
+		assert(0 && "FIXME: need to handle this case");
 	assert(ver->parent == VER_PARENT_UNLINKED &&
 	       "I don't think this is supposed to happen");
 	free(ver);

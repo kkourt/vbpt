@@ -73,8 +73,8 @@ item_dummy(phash_t *phash, ul_t idx, bool vals)
     } else {
         #if defined(VAL_OVERLOAD)
         assert(vals);
-        ul_t *vals = phash_vals(phash);
-        ret = (vals[idx] == DUMMY);
+        ul_t *pvals = phash_vals(phash);
+        ret = (pvals[idx] == DUMMY);
         #elif defined(KEY_OVERLOAD)
         ret = (phash->kvs[idx] == DUMMY);
         #endif

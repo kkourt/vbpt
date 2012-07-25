@@ -44,8 +44,6 @@ bool vbpt_log_ws_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth);
 bool vbpt_log_ds_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth);
 bool vbpt_log_ds_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth);
 
-void vbpt_log_dealloc(vbpt_log_t *log);
-
 /*
  * high-level operations
  */

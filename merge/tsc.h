@@ -14,7 +14,7 @@ struct tsc {
 typedef struct tsc tsc_t;
 
 #if defined(__i386__) || defined(__x86_64__)
-static inline uint64_t get_ticks()
+static inline uint64_t get_ticks(void)
 {
 	uint32_t hi,low;
 	uint64_t ret;
@@ -29,7 +29,7 @@ static inline uint64_t get_ticks()
 }
 #elif defined(__ia64__)
 #include <asm/intrinsics.h>
-static inline uint64_t get_ticks()
+static inline uint64_t get_ticks(void)
 {
 	uint64_t ret = ia64_getreg(_IA64_REG_AR_ITC);
 	ia64_barrier();
@@ -38,7 +38,7 @@ static inline uint64_t get_ticks()
 }
 #elif defined(__sparc__)
 // linux-2.6.28/arch/sparc64/kernel/time.c
-static inline uint64_t get_ticks()
+static inline uint64_t get_ticks(void)
 {
 	uint64_t t;
 	__asm__ __volatile__ (

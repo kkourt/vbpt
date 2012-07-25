@@ -165,6 +165,7 @@ vbpt_gv_add_node(vbpt_node_t *node)
 			child = vbpt_add_leaf(hdr2leaf(child_hdr));
 			break;
 
+			case VBPT_INVALID:
 			default:
 			assert(false);
 		}

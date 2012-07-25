@@ -217,7 +217,7 @@ vbpt_log_conflict(vbpt_log_t *log1_rd, unsigned depth1,
 					return true;
 			} else break;
 		}
-		vbpt_log_t *log1_rd = vbpt_log_parent(log1_rd);
+		log1_rd = vbpt_log_parent(log1_rd);
 		assert(log1_rd != NULL);
 	}
 	return false;

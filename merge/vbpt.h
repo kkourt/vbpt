@@ -86,6 +86,7 @@ void vbpt_path_print(vbpt_path_t *path);
 
 /* public interface */
 vbpt_tree_t *vbpt_tree_alloc(ver_t *ver);
+void         vbpt_tree_dealloc(vbpt_tree_t *tree);
 vbpt_leaf_t *vbpt_leaf_alloc(size_t leaf_size, ver_t *ver);
 void vbpt_insert(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o);
 vbpt_tree_t *vbpt_tree_branch(vbpt_tree_t *parent);
@@ -161,6 +162,7 @@ vbpt_hdr_release(refcnt_t *h_refcnt)
 			vbpt_leaf_dealloc(leaf);
 		} break;
 
+		case VBPT_INVALID:
 		default:
 		assert(false);
 	}
