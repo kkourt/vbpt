@@ -79,6 +79,7 @@ vbpt_log_destroy(vbpt_log_t *log)
 {
 	assert(log->state == VBPT_LOG_FINALIZED);
 	pset_tfree(&log->rd_set);
+	pset_tfree(&log->rm_set);
 	phash_tfree(&log->wr_set);
 }
 
@@ -239,9 +240,9 @@ vbpt_log_replay__(vbpt_tree_t *tree, vbpt_log_t *log)
 			vbpt_leaf_t *leaf = (vbpt_leaf_t *)val;
 			assert(leaf == NULL || leaf->l_hdr.type == VBPT_LEAF);
 			if (leaf)
-				vbpt_txtree_insert(tree, key, leaf, NULL);
+				vbpt_logtree_insert(tree, key, leaf, NULL);
 			else
-				vbpt_txtree_delete(tree, key, NULL);
+				vbpt_logtree_delete(tree, key, NULL);
 		} else
 			break;
 	}

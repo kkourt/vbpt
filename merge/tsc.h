@@ -141,4 +141,13 @@ static inline void tsc_report(tsc_t *tsc)
 	printf("time  : %lf (sec)\n", __tsc_getsecs(ticks));
 }
 
+#define TSC_MEASURE_TICKS(_ticks, _code)       \
+uint64_t _ticks = ({                           \
+        tsc_t xtsc_;                           \
+        tsc_init(&xtsc_); tsc_start(&xtsc_);   \
+        do { _code } while (0);                \
+        tsc_pause(&xtsc_);                     \
+        tsc_getticks(&xtsc_);                  \
+});
+
 #endif

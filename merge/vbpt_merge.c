@@ -3,6 +3,7 @@
 #include "vbpt.h"
 #include "vbpt_merge.h"
 #include "vbpt_log.h"
+#include "vbpt_tx.h"
 
 #include "misc.h"
 #include "tsc.h"
@@ -571,8 +572,8 @@ vbpt_cmp(vbpt_tree_t *t1, vbpt_tree_t *t2)
 bool
 vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree)
 {
-	vbpt_log_t *g_log = vbpt_txtree_getlog(gtree);
-	vbpt_log_t *p_log = vbpt_txtree_getlog(ptree);
+	vbpt_log_t *g_log = vbpt_tree_log(gtree);
+	vbpt_log_t *p_log = vbpt_tree_log(ptree);
 
 	uint16_t g_dist, p_dist;
 	ver_t *hpver = NULL; // initialize to shut the compiler up
@@ -614,8 +615,8 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	dmsg("\n\trange: %4lu,+%3lu\n\tgc_v:%s\n\tpc_v:%s\n",
 	      gc->range.key, gc->range.len, ver_str(gc_v), ver_str(pc_v));
 	#endif
-	vbpt_log_t *plog = vbpt_txtree_getlog(ptree);
-	vbpt_log_t *glog = vbpt_txtree_getlog((vbpt_tree_t *)gtree);
+	vbpt_log_t *plog = vbpt_tree_log(ptree);
+	vbpt_log_t *glog = vbpt_tree_log((vbpt_tree_t *)gtree);
 	vbpt_range_t *range = &pc->range;
 
 	/*
@@ -738,6 +739,8 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
  * The merging happens  *in-place* in @ptree. If successful, true is returned.
  * If not, false is returned, and @ptree is invalid.
  *
+ * If successful and @vbase not NULL, @hpver is placed in @vbase
+ *
  * Assuming that @gver is the version of @gtree, and @pver is the version of
  * @ptree: If merge is successful, @pver should become @pver's ancestor (which
  * is the whole point of doing the merge: to make it appear as if the changes in
@@ -769,9 +772,11 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
  * Hence, we choose to restrict merging so that all refcounts of versions from
  * @mver to @vj are 1. Note that this translates to requiring that a transaction
  * commits only after all of its nested transactions have comitted.
+ *
+ * TODO: check for invalid merges (e.g., when no merge is needed)
  */
 bool
-vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt)
+vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 {
 	#if defined(XDEBUG_MERGE)
 	//dmsg("Global  "); vbpt_tree_print(gt, true);
@@ -792,7 +797,8 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt)
 		goto end;
 	}
 	#if defined(XDEBUG_MERGE)
-	printf("VERSIONS: gver:%s  pver:%s  vj:%s\n", ver_str(gver), ver_str(pver), ver_str(vj));
+	printf("VERSIONS: gver:%s  pver:%s  vj:%s\n",
+	        ver_str(gver), ver_str(pver), ver_str(vj));
 	#endif
 
 	while (!(vbpt_cur_end(gc) && vbpt_cur_end(pc))) {
@@ -812,6 +818,8 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt)
 	/* success: fix version tree */
 	assert(!ver_chain_has_branch(pver, hpver));
 	ver_rebase(hpver, gver);
+	if (vbase)
+		*vbase = gver;
 end:
 	vbpt_cur_free(gc);
 	vbpt_cur_free(pc);

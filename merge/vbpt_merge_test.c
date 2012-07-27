@@ -3,9 +3,11 @@
 #include "vbpt.h"
 #include "vbpt_log.h"
 #include "vbpt_merge.h"
-#include "array_size.h"
+#include "vbpt_mtree.h"
+#include <vbpt_tx.h>
 
 #include "tsc.h"
+#include "array_size.h"
 
 #if 0
 static void __attribute__((unused))
@@ -23,13 +25,21 @@ ver_test(void)
 #endif
 
 static void
-vbpt_txtree_insert_bulk(vbpt_tree_t *tree, uint64_t *ins, uint64_t ins_len)
+print_arr(uint64_t *arr, uint64_t arr_len)
+{
+	for (uint64_t i=0; i < arr_len; i++)
+		printf("%lu ", arr[i]);
+	printf("\n");
+}
+
+static void
+vbpt_logtree_insert_bulk(vbpt_tree_t *tree, uint64_t *ins, uint64_t ins_len)
 {
 	ver_t *ver = tree->ver;
 	for (uint64_t i=0; i<ins_len; i++) {
 		uint64_t key = ins[i];
 		vbpt_leaf_t *leaf = vbpt_leaf_alloc(VBPT_LEAF_SIZE, ver);
-		vbpt_txtree_insert(tree, key, leaf, NULL);
+		vbpt_logtree_insert(tree, key, leaf, NULL);
 	}
 }
 
@@ -44,49 +54,67 @@ vbpt_tree_insert_bulk(vbpt_tree_t *t, uint64_t *ins, uint64_t ins_len)
 	}
 }
 
-static void
-print_arr(uint64_t *arr, uint64_t arr_len)
+static bool
+vbpt_mt_merge_test(vbpt_tree_t *tree,
+                   uint64_t *ins1, uint64_t ins1_len,
+                   uint64_t *ins2, uint64_t ins2_len)
 {
-	for (uint64_t i=0; i < arr_len; i++)
-		printf("%lu ", arr[i]);
-	printf("\n");
+	vbpt_mtree_t *mtree = vbpt_mtree_alloc(tree);
+	bool ret = true;
+
+	vbpt_txtree_t *txt1 = vbpt_txtree_alloc(mtree);
+	vbpt_txtree_t *txt2 = vbpt_txtree_alloc(mtree);
+
+	vbpt_logtree_insert_bulk(txt1->tree, ins1, ins1_len);
+	vbpt_logtree_finalize(txt1->tree);
+	bool ret1 = vbpt_txtree_try_commit(txt1, mtree);
+	assert(ret1 == true);
+
+	vbpt_logtree_insert_bulk(txt2->tree, ins2, ins2_len);
+	vbpt_logtree_finalize(txt2->tree);
+	bool ret2 = vbpt_txtree_try_commit_merge(txt2, mtree, 1);
+	assert(ret2 == true);
+
+	//ver_path_print(mtree->mt_tree->ver, stdout);
+
+	vbpt_mtree_destroy(mtree, NULL);
+
+	return ret;
 }
 
 static bool
 vbpt_merge_test(vbpt_tree_t *t,
                uint64_t *ins1, uint64_t ins1_len,
-	       uint64_t *ins2, uint64_t ins2_len)
+               uint64_t *ins2, uint64_t ins2_len)
 {
-	tsc_t tsc;
+	vbpt_tree_t *logt1 = vbpt_logtree_branch(t);
+	vbpt_logtree_insert_bulk(logt1, ins1, ins1_len);
 
-	vbpt_tree_t *txt1 = vbpt_txtree_branch(t);
-	vbpt_txtree_insert_bulk(txt1, ins1, ins1_len);
+	vbpt_tree_t *logt2_a = vbpt_logtree_branch(t);
+	TSC_MEASURE_TICKS(t_ins2_a, {
+		vbpt_logtree_insert_bulk(logt2_a, ins2, ins2_len);
+	});
 
-	vbpt_tree_t *txt2_a = vbpt_txtree_branch(t);
-
-	tsc_init(&tsc); tsc_start(&tsc);
-	vbpt_txtree_insert_bulk(txt2_a, ins2, ins2_len);
-	tsc_pause(&tsc); uint64_t t_ins2_a = tsc_getticks(&tsc);
-
-	vbpt_tree_t *txt2_b = vbpt_txtree_branch(t);
-
-	tsc_init(&tsc); tsc_start(&tsc);
-	vbpt_txtree_insert_bulk(txt2_b, ins2, ins2_len);
-	tsc_pause(&tsc); uint64_t t_ins2_b = tsc_getticks(&tsc);
+	vbpt_tree_t *logt2_b = vbpt_logtree_branch(t);
+	TSC_MEASURE_TICKS(t_ins2_b, {
+		vbpt_logtree_insert_bulk(logt2_b, ins2, ins2_len);
+	})
 
 	#if 0
 	dmsg("PARENT: "); vbpt_tree_print(t, true);
-	dmsg("T1:     "); vbpt_tree_print(txt1, true);
-	dmsg("T2:     "); vbpt_tree_print(txt2_a, true);
+	dmsg("T1:     "); vbpt_tree_print(logt1, true);
+	dmsg("T2:     "); vbpt_tree_print(logt2_a, true);
 	#endif
 
-	tsc_init(&tsc); tsc_start(&tsc);
-	unsigned log_ret = vbpt_log_merge(txt1, txt2_a);
-	tsc_pause(&tsc); uint64_t t_merge_log = tsc_getticks(&tsc);
+	unsigned log_ret;
+	TSC_MEASURE_TICKS(t_merge_log, {
+		log_ret = vbpt_log_merge(logt1, logt2_a);
+	})
 
-	tsc_init(&tsc); tsc_start(&tsc);
-	unsigned mer_ret = vbpt_merge(txt1, txt2_b);
-	tsc_pause(&tsc); uint64_t t_merge_vbpt = tsc_getticks(&tsc);
+	unsigned mer_ret;
+	TSC_MEASURE_TICKS(t_merge_vbpt, {
+		mer_ret = vbpt_merge(logt1, logt2_b, NULL);
+	})
 
 	bool success = false;
 	int err = 0;
@@ -106,7 +134,7 @@ vbpt_merge_test(vbpt_tree_t *t,
 
 		case 3:
 		//printf("Both merges succeeded\n");
-		if (!vbpt_cmp(txt2_a, txt2_b)) {
+		if (!vbpt_cmp(logt2_a, logt2_b)) {
 			printf("======> Resulting trees are not the same\n");
 			err = 1;
 		}
@@ -123,21 +151,25 @@ vbpt_merge_test(vbpt_tree_t *t,
 		printf("INS1     : "); print_arr(ins1, ins1_len);
 		printf("INS2     : "); print_arr(ins2, ins2_len);
 		printf("\n");
-		printf("LOG MERGE: "); vbpt_tree_print(txt2_a, true);
-		printf("BPT MERGE: "); vbpt_tree_print(txt2_b, true);
+		printf("LOG MERGE: "); vbpt_tree_print(logt2_a, true);
+		printf("BPT MERGE: "); vbpt_tree_print(logt2_b, true);
 	}
 
 	if (err)
 		assert(false);
 
+	#define print_ticks(x, base)\
+		printf("%-13s %5lu (%0.3lf)\n", \
+		       "" # x ":", x, (double)base/(double)x);
 	if (success) {
 		printf("----\n");
-		printf("t_ins2_a:     %5lu (%0.3lf)\n", t_ins2_a,     ((double)t_ins2_a / (double)t_ins2_a)    );
-		printf("t_ins2_b:     %5lu (%0.3lf)\n", t_ins2_b,     ((double)t_ins2_a / (double)t_ins2_b)    );
-		printf("t_merge_log:  %5lu (%0.3lf)\n", t_merge_log,  ((double)t_ins2_a / (double)t_merge_log) );
-		printf("t_merge_vbpt: %5lu (%0.3lf)\n", t_merge_vbpt, ((double)t_ins2_a / (double)t_merge_vbpt));
+		print_ticks(t_ins2_a, t_ins2_a);
+		print_ticks(t_ins2_b, t_ins2_a);
+		print_ticks(t_merge_log, t_ins2_a);
+		print_ticks(t_merge_vbpt, t_ins2_a);
 		printf("----\n");
 	}
+	#undef print_ticks
 
 	return success;
 }
@@ -168,6 +200,21 @@ test2(void)
 	vbpt_tree_insert_bulk(t, keys0, ARRAY_SIZE(keys0));
 
 	return vbpt_merge_test(t, keys1, ARRAY_SIZE(keys1), keys2, ARRAY_SIZE(keys2));
+}
+
+static bool __attribute__((unused))
+test1_mt(void)
+{
+	uint64_t keys0[] = {42, 100};
+	uint64_t keys1[] = {66, 99, 200};
+	uint64_t keys2[] = {11};
+
+	vbpt_tree_t *t = vbpt_tree_create();
+	vbpt_tree_insert_bulk(t, keys0, ARRAY_SIZE(keys0));
+
+	return vbpt_mt_merge_test(t,
+				  keys1, ARRAY_SIZE(keys1),
+				  keys2, ARRAY_SIZE(keys2));
 }
 
 // distribution description
@@ -201,7 +248,7 @@ generate_keys(struct dist_desc *d)
 	}
 }
 
-static bool
+static bool __attribute__((unused))
 test_merge_rand(struct dist_desc *d0, struct dist_desc *d1, struct dist_desc *d2)
 {
 	generate_keys(d0);
@@ -218,7 +265,7 @@ int main(int argc, const char *argv[])
 {
 	//test1();
 	//test2();
-	#if 1
+	#if 0
 	struct dist_desc d0 = { .r_start =   0, .r_len =16384, .nr = 1024,  .seed = 0, .data = NULL};
 	struct dist_desc d1 = { .r_start =   0, .r_len = 128, .nr =   16, .seed = 0, .data = NULL};
 	struct dist_desc d2 = { .r_start =   4096, .r_len = 128, .nr =  16, .seed = 0, .data = NULL};
@@ -236,6 +283,7 @@ int main(int argc, const char *argv[])
 			}
 	printf("------> Count: %u Successes: %u\n", count, successes);
 	#endif
+	test1_mt();
 
 	return 0;
 }

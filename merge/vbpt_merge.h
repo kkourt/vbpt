@@ -36,7 +36,7 @@ bool vbpt_cmp(vbpt_tree_t *t1, vbpt_tree_t *t2);
  * Merging
  */
 
-bool vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt);
+bool vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t **vbase);
 bool vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree);
 
 /**

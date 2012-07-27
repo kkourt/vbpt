@@ -12,7 +12,7 @@
 // This partial order is queried when performing a merge operations.
 
 // We use a ->parent pointer to track the partial order to enable for
-// concurrency
+// concurrency (instead of using children pointers)
 
 // For implementation convenience we add the operation log to the version, so we
 // need to include the appropriate header
@@ -67,34 +67,45 @@
  *
  * Instead, we use two reference counts: one for keeping a version to the
  * version tree (rfcnt_children), and one for reclaiming the version
- * (rfcnt_hdrs). We use rfcnt_children to remove a version from the tree, and
- * rfcnt_hdrs to reclaim the version. Reming versions eagerly from the tree
+ * (rfcnt_total). We use rfcnt_children to remove a version from the tree, and
+ * rfcnt_total to reclaim the version. Reming versions eagerly from the tree
  * avoids having to search long version chains.
+ *
+ * There are two options on how the two reference counts are kept: (a)
+ * rfcnt_total includes references from children and (b) rfcnt_total does not
+ * includes references from children. Option (b) has the advantage that when you
+ * find a chain of stale versions you can just remove them by just unlinking
+ * them from the tree. A disadvantage of (b) is that it needs special handling
+ * in case ->rfcnt_total becomes zero before the node was detected as stale
+ * (i.e., it's still a part of the chain), since in that case it can't be
+ * reclaimed without being removed from the chain. Option (a) does not have this
+ * problem, but it requires traversing the list of stale versions and decrement
+ * their refcount, which raises concurrency issues. For simplicity, we follow
+ * (a) and require ver_tree_gc() to be protetected from reentrancy.
  *
  * Finally, we need to ensure that no user will try to branch off a new version
  * from stale versions. To achieve this property, we let the user define a
  * frontier above which it is guaranteed that no new version will be branched.
  * This frontier is defined by "pinning" versions. IOW, when a user pins a
- * version using ver_pin() it is guaranteed that no version reachable via the
- * ->parent pointer of the pinned version will be used as a branch point.
+ * version using ver_pin(), the user guarantees that no version reachable via
+ * the ->parent pointer of the pinned version will be used as a branch point.
  *
  * The typical scenario for this is when the user maintains a "blessed" version,
- * and all branches happen on this version (or in the case of nesting, one one
- * of its * children).
+ * and all branches happen on this version (or in the case of nesting, on one
+ * of its children).
  *
+ * NOTE: The following are currently deprecated, since we end up serializing
+ * ver_tree_gc() anyway.
  * There are two possible implementations for pinning a version:
- *
  *  1. We can just run ver_tree_gc() when a version is pinned, but we need to
  *     make sure that no other ver_tree_gc() instance will run starting from an
  *     ancestor of the pinned version.
- *
  *  2. If we can't guarantee the above property, we can increase the
  *     rfcnt_children for the pinned version, so that it won't dissapear by
  *     another run of the garbage collector. This might be usefull, for example,
  *     if we want to run the collector after a rebase(). Obviously, we also need
  *     to make sure that the rfcnt_children is decreased for the previous pinned
  *     version.
- *
  * For now, we follow the first approach.
  *
  * To avoid keeping old versions around for too long, we could apply another
@@ -126,7 +137,7 @@
 struct ver {
 	struct ver *parent;
 	refcnt_t   rfcnt_children;
-	refcnt_t   rfcnt_hdrs;
+	refcnt_t   rfcnt_total;
 	#ifndef NDEBUG
 	size_t     v_id;
 	#endif
@@ -134,14 +145,12 @@ struct ver {
 };
 typedef struct ver ver_t;
 
-#define VER_PARENT_UNLINKED ((ver_t *)0xdeaddad)
-
 void ver_debug_init(ver_t *ver);
 
 static inline void
 ver_init__(ver_t *ver)
 {
-	refcnt_init(&ver->rfcnt_hdrs, 1);
+	refcnt_init(&ver->rfcnt_total, 1);
 	refcnt_init(&ver->rfcnt_children, 0);
 	#ifndef NDEBUG
 	ver_debug_init(ver);
@@ -159,11 +168,12 @@ ver_str(ver_t *ver)
 	static char buff_arr[VERSTR_BUFFS_NR][VERSTR_BUFF_SIZE];
 	char *buff = buff_arr[i++ % VERSTR_BUFFS_NR];
 	#ifndef NDEBUG
-	snprintf(buff, VERSTR_BUFF_SIZE, " [%p: ver:%3zd rfcnt_children:%3u rfcnt_hdrs:%3u] ",
+	snprintf(buff, VERSTR_BUFF_SIZE,
+	         " [%p: ver:%3zd rfcnt_children:%3u rfcnt_total:%3u] ",
 		 ver,
 	         ver->v_id,
 		 refcnt_get(&ver->rfcnt_children),
-		 refcnt_get(&ver->rfcnt_hdrs));
+		 refcnt_get(&ver->rfcnt_total));
 	#else
 	snprintf(buff, VERSTR_BUFF_SIZE, " (ver:%p ) ", ver);
 	#endif
@@ -176,14 +186,14 @@ ver_path_print(ver_t *v, FILE *fp)
 	fprintf(fp, "ver path: ");
 	do {
 		fprintf(fp, "%s ->", ver_str(v));
-	} while ( (v = v->parent) != NULL);
+	} while ((v = v->parent) != NULL);
 	fprintf(fp, "NULL\n");
 }
 
 static inline ver_t *
-refcnt_nodes2ver(refcnt_t *rcnt)
+refcnt_total2ver(refcnt_t *rcnt)
 {
-	return container_of(rcnt, ver_t, rfcnt_hdrs);
+	return container_of(rcnt, ver_t, rfcnt_total);
 }
 
 /**
@@ -192,7 +202,7 @@ refcnt_nodes2ver(refcnt_t *rcnt)
 static inline ver_t *
 ver_getref(ver_t *ver)
 {
-	refcnt_inc(&ver->rfcnt_hdrs);
+	refcnt_inc(&ver->rfcnt_total);
 	return ver;
 }
 
@@ -204,7 +214,7 @@ static void ver_release(refcnt_t *);
 static inline void
 ver_putref(ver_t *ver)
 {
-	refcnt_dec(&ver->rfcnt_hdrs, ver_release);
+	refcnt_dec(&ver->rfcnt_total, ver_release);
 }
 
 
@@ -214,15 +224,24 @@ ver_putref(ver_t *ver)
 static void
 ver_release(refcnt_t *refcnt)
 {
-	ver_t *ver = refcnt_nodes2ver(refcnt);
+	ver_t *ver = refcnt_total2ver(refcnt);
+	#if 0
 	// this is special case where a version is no longer references in a
 	// tree, but is a part of the version tree. I think the best solution is
 	// to have the tree grab a reference. Want to test the current gc sceme
 	// before applying this change though, so for know just a warning.
-	if (refcnt_get(&ver->rfcnt_children) != 0)
-		assert(0 && "FIXME: need to handle this case");
-	assert(ver->parent == VER_PARENT_UNLINKED &&
-	       "I don't think this is supposed to happen");
+	if (refcnt_get(&ver->rfcnt_children) != 0) {
+		//assert(0 && "FIXME: need to handle this case");
+		//printf("We are gonna leak one version\n");
+		return;
+	}
+	#endif
+
+	ver_t *parent = ver->parent;
+	if (parent != NULL) {
+		refcnt_dec__(&parent->rfcnt_children);
+		refcnt_dec(&parent->rfcnt_total, ver_release);
+	}
 	free(ver);
 }
 
@@ -241,23 +260,22 @@ ver_create(void)
  *  Find the longer chain that ends at NULL and all nodes have a rfcnt_children
  *  of 1. This chain can be detached from the version tree.
  *
- * To avoid having to serialize collection, this funcion is reentrant.
+ * This function is not reentrant. The caller needs to make sure that it won't
+ * be run on the same chain.
  */
-static void
+static void inline
 ver_tree_gc(ver_t *ver)
 {
 	ver_t *ver_p = ver->parent;
 	while (true) {
-
 		// reached bottom
 		if (ver_p == NULL)
 			break;
-
 		// try to get a the refcount. If it's not possible somebody else
 		// runs the collector and has the lock, so just bail out.
 		uint32_t children;
 		if (!refcnt_try_get(&ver_p->rfcnt_children, &children))
-			return;
+			assert(false && "This shouldn't happen");
 		assert(children > 0);
 
 		// found a branch, reset the head of the chain
@@ -267,20 +285,21 @@ ver_tree_gc(ver_t *ver)
 		ver_p = ver_p->parent;
 	}
 
-	#ifndef NDEBUG
 	// poison ->parent pointers of stale versions
 	ver_t *v = ver->parent;
-	while (v != NULL || v != VER_PARENT_UNLINKED) {
+	while (v != NULL) {
 		ver_t *tmp = v->parent;
-		v->parent = VER_PARENT_UNLINKED;
+		v->parent = NULL;
+		refcnt_dec__(&v->rfcnt_children);
+		refcnt_dec(&v->rfcnt_total, ver_release);
 		v = tmp;
 	}
-	#endif
 
 	// everything below ver->parent is stale, remove them from the tree
 	// ASSUMPTION: this assignment is atomic.
 	ver->parent = NULL;
 }
+
 
 /**
  * pin a version from the tree:
@@ -290,7 +309,17 @@ ver_tree_gc(ver_t *ver)
 static inline void
 ver_pin(ver_t *pinned_new, ver_t *pinned_old)
 {
-	ver_tree_gc(pinned_new);
+	refcnt_inc(&pinned_new->rfcnt_total);
+	if (pinned_old) {
+		refcnt_dec(&pinned_old->rfcnt_total, ver_release);
+	}
+	//ver_tree_gc(pinned_new);
+}
+
+static inline void
+ver_unpin(ver_t *ver)
+{
+	refcnt_dec(&ver->rfcnt_total, ver_release);
 }
 
 
@@ -301,6 +330,7 @@ static inline void
 ver_setparent__(ver_t *v, ver_t *parent)
 {
 	refcnt_inc__(&parent->rfcnt_children); // do not check if it's zero
+	refcnt_inc(&parent->rfcnt_total);
 	v->parent = parent;
 }
 
@@ -314,6 +344,7 @@ ver_rebase(ver_t *ver, ver_t *new_parent)
 {
 	if (ver->parent) {
 		refcnt_dec__(&ver->parent->rfcnt_children);
+		refcnt_dec(&ver->parent->rfcnt_total, ver_release);
 		//ver_tree_gc(ver);
 	}
 	ver_setparent__(ver, new_parent);

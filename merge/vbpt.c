@@ -303,6 +303,14 @@ vbpt_tree_create(void)
 	return vbpt_tree_alloc(ver);
 }
 
+void
+vbpt_tree_branch_init(vbpt_tree_t *parent, vbpt_tree_t *ret)
+{
+	ret->ver = ver_branch(parent->ver);
+	ret->root = vbpt_node_getref(parent->root);
+	ret->height = parent->height;
+}
+
 /**
  * branch a new tree -- grabs a reference of the root node
  */
@@ -310,11 +318,10 @@ vbpt_tree_t *
 vbpt_tree_branch(vbpt_tree_t *parent)
 {
 	vbpt_tree_t *ret = xmalloc(sizeof(vbpt_tree_t));
-	ret->ver = ver_branch(parent->ver);
-	ret->root = vbpt_node_getref(parent->root);
-	ret->height = parent->height;
+	vbpt_tree_branch_init(parent, ret);
 	return ret;
 }
+
 
 /**
  * deallocate a tree descriptor

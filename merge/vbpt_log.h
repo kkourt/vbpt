@@ -45,43 +45,48 @@ bool vbpt_log_ds_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth);
 bool vbpt_log_ds_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth);
 
 /*
- * high-level operations
- */
-
-bool vbpt_log_conflict(vbpt_log_t *log1_rd, unsigned depth1,
-                       vbpt_log_t *log2_wr, unsigned depth2);
-
-/**
- * txtree: transactional operations on trees
+ * logtree: operations on trees that are recorded on logs
  *  The functions are just wrappers that use "hidden" log on version.
- *  At some point, we might want to move them to a different file, but for now
- *  they are very simple.
  */
 
 static inline vbpt_log_t *
-vbpt_txtree_getlog(vbpt_tree_t *t)
+vbpt_tree_log(vbpt_tree_t *t)
 {
 	return &t->ver->v_log;
 }
-
 
 /**
  * branch off a new version of a tree from @t and return it
  *   the log is initialized
  */
 static inline vbpt_tree_t *
-vbpt_txtree_branch(vbpt_tree_t *t)
+vbpt_logtree_branch(vbpt_tree_t *t)
 {
 	vbpt_tree_t *ret = vbpt_tree_branch(t);
-	vbpt_log_t *log = vbpt_txtree_getlog(ret);
+	vbpt_log_t *log = vbpt_tree_log(ret);
 	vbpt_log_init(log);
 	return ret;
 }
 
 static inline void
-vbpt_txtree_insert(vbpt_tree_t *t,  uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o)
+vbpt_logtree_finalize(vbpt_tree_t *tree)
 {
-	vbpt_log_t *log = vbpt_txtree_getlog(t);
+	vbpt_log_t *log = vbpt_tree_log(tree);
+	vbpt_log_finalize(log);
+}
+
+static inline void
+vbpt_logtree_dealloc(vbpt_tree_t *tree)
+{
+	vbpt_log_t *log = vbpt_tree_log(tree);
+	vbpt_log_destroy(log);
+	vbpt_tree_dealloc(tree);
+}
+
+static inline void
+vbpt_logtree_insert(vbpt_tree_t *t,  uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o)
+{
+	vbpt_log_t *log = vbpt_tree_log(t);
 	if (o)
 		vbpt_log_read(log, k);
 	vbpt_log_write(log, k, l);
@@ -89,14 +94,23 @@ vbpt_txtree_insert(vbpt_tree_t *t,  uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o)
 }
 
 static inline void
-vbpt_txtree_delete(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t **o)
+vbpt_logtree_delete(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t **o)
 {
-	vbpt_log_t *log = vbpt_txtree_getlog(t);
+	vbpt_log_t *log = vbpt_tree_log(t);
 	if (o)
 		vbpt_log_read(log, k);
 	vbpt_log_delete(log, k);
 	vbpt_delete(t, k, o);
 }
+
+
+
+/*
+ * high-level operations
+ */
+
+bool vbpt_log_conflict(vbpt_log_t *log1_rd, unsigned depth1,
+                       vbpt_log_t *log2_wr, unsigned depth2);
 
 void vbpt_log_replay(vbpt_tree_t *txt, vbpt_log_t *log, unsigned log_depth);
 
