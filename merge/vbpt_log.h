@@ -55,6 +55,13 @@ vbpt_tree_log(vbpt_tree_t *t)
 	return &t->ver->v_log;
 }
 
+static inline void
+vbpt_logtree_log_init(vbpt_tree_t *tree)
+{
+	vbpt_log_t *log = vbpt_tree_log(tree);
+	vbpt_log_init(log);
+}
+
 /**
  * branch off a new version of a tree from @t and return it
  *   the log is initialized
@@ -63,10 +70,10 @@ static inline vbpt_tree_t *
 vbpt_logtree_branch(vbpt_tree_t *t)
 {
 	vbpt_tree_t *ret = vbpt_tree_branch(t);
-	vbpt_log_t *log = vbpt_tree_log(ret);
-	vbpt_log_init(log);
+	vbpt_logtree_log_init(ret);
 	return ret;
 }
+
 
 static inline void
 vbpt_logtree_finalize(vbpt_tree_t *tree)

@@ -49,7 +49,7 @@ vbpt_mtree_alloc(vbpt_tree_t *tree)
 }
 
 static inline void
-vbpt_mtree_destroy(vbpt_mtree_t *mtree, vbpt_tree_t **tree_ptr)
+vbpt_mtree_dealloc(vbpt_mtree_t *mtree, vbpt_tree_t **tree_ptr)
 {
 	vbpt_tree_t *tree = mtree->mt_tree;
 
@@ -65,13 +65,14 @@ vbpt_mtree_destroy(vbpt_mtree_t *mtree, vbpt_tree_t **tree_ptr)
 	}
 }
 
-/**
- * get the current version of mtree
- */
-static inline vbpt_tree_t *
-vbpt_mtree_tree(vbpt_mtree_t *mtree)
+/* we do a branch (i.e., grab a references for the root and version) under a
+ * lock, so that it won't dissapear */
+static inline void
+vbpt_mtree_branch(vbpt_mtree_t *mtree, vbpt_tree_t *tree)
 {
-	return mtree->mt_tree; // ASSUMPTION: this is atomic
+	spin_lock(&mtree->mt_lock);
+	vbpt_tree_branch_init(mtree->mt_tree, tree);
+	spin_unlock(&mtree->mt_lock);
 }
 
 /**

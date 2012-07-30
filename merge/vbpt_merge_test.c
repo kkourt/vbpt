@@ -351,7 +351,7 @@ vbpt_mt_merge_test(vbpt_tree_t *tree, unsigned nthreads, struct dist_desc *wls)
 		arg->mtree   = mtree;
 		arg->wl      = wls + i;
 		arg->barrier = &barrier;
-		arg->loops   = 16;
+		arg->loops   = 128;
 		arg->id      = i;
 		pthread_create(tids+i, NULL, merge_test_thr, arg);
 	}
@@ -365,7 +365,7 @@ vbpt_mt_merge_test(vbpt_tree_t *tree, unsigned nthreads, struct dist_desc *wls)
 		pthread_join(tids[i], NULL);
 	}
 
-	vbpt_mtree_destroy(mtree, NULL);
+	vbpt_mtree_dealloc(mtree, NULL);
 	printf("total_ticks: %.1lfk\n", (double)thr_ticks/1000.0);
 	for (unsigned i=0; i<nthreads; i++) {
 		printf("stats from thread: %u\n", i);

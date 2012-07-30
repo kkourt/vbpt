@@ -24,10 +24,14 @@ static inline vbpt_txtree_t *
 vbpt_txtree_alloc(vbpt_mtree_t *mtree)
 {
 	vbpt_txtree_t *ret = xmalloc(sizeof(vbpt_txtree_t));
-	vbpt_tree_t *tree_b = vbpt_mtree_tree(mtree);
-	ret->tree = vbpt_logtree_branch(tree_b);
+
+	vbpt_tree_t *tree = vbpt_tree_alloc(NULL); // allocate a dummy tree
+	vbpt_mtree_branch(mtree, tree);
+	vbpt_logtree_log_init(tree);
+
+	ret->tree = tree;
 	ret->depth = 1;
-	ret->bver = tree_b->ver;
+	ret->bver = tree->ver->parent;
 	return ret;
 }
 
