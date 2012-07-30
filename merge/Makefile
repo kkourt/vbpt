@@ -13,11 +13,11 @@ all:  vbpt-test vbpt_merge_test
 vbpt-test.o: vbpt.c $(hdrs)
 	$(CC) $(CFLAGS) -DVBPT_TEST $< -c -o $@
 
-vbpt-test: vbpt_gv.o vbpt-test.o ver.o phash.o
-	$(CC) $(CFLAGS) $(LIBS) -lgraph $^ -o $@
+vbpt-test: vbpt-test.o ver.o vbpt_log.o phash.o
+	$(CC) $(CFLAGS) $(LIBS) $^ -o $@
 
 vbpt_merge_test: vbpt_merge_test.o vbpt_merge.o vbpt_log.o vbpt.o ver.o phash.o
-	$(CC) $(CFLAGS) $(LIBS) -lgraph -DVBPT_MERGE_TEST $^ -o $@
+	$(CC) $(CFLAGS) $(LIBS) -DVBPT_MERGE_TEST $^ -o $@
 
 %.o: %.c $(hdrs)
 	$(CC) $(CFLAGS) $< -c -o $@
@@ -30,5 +30,5 @@ vbpt_merge_test: vbpt_merge_test.o vbpt_merge.o vbpt_log.o vbpt.o ver.o phash.o
 %.pdf: %.dot
 	 dot -Tpdf $< -o $@
 
-clean: 
+clean:
 	rm -f *.o vbpt_merge-test vbpt-cur-test vbpt-test *.gcno *.gcov *.gcda *.i

@@ -76,12 +76,19 @@ vbpt_logtree_finalize(vbpt_tree_t *tree)
 }
 
 static inline void
-vbpt_logtree_dealloc(vbpt_tree_t *tree)
+vbpt_logtree_destroy(vbpt_tree_t *tree)
 {
 	vbpt_log_t *log = vbpt_tree_log(tree);
 	vbpt_log_destroy(log);
+}
+
+static inline void
+vbpt_logtree_dealloc(vbpt_tree_t *tree)
+{
+	vbpt_logtree_destroy(tree);
 	vbpt_tree_dealloc(tree);
 }
+
 
 static inline void
 vbpt_logtree_insert(vbpt_tree_t *t,  uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o)

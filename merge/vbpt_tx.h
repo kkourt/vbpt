@@ -38,35 +38,54 @@ vbpt_txtree_dealloc(vbpt_txtree_t *txt)
 	free(txt);
 }
 
-static inline bool
-vbpt_txtree_try_commit(vbpt_txtree_t *txt, vbpt_mtree_t *mtree)
-{
-	bool ret = vbpt_mtree_try_commit(mtree, txt->tree, txt->bver, NULL);
-	if (ret)
-		free(txt);
-	return ret;
-}
+/* transaction result */
+typedef enum {
+	VBPT_COMMIT_OK     =       0,
+	VBPT_COMMIT_MERGED =       1,
+	VBPT_COMMIT_MERGE_FAILED = 2,
+	VBPT_COMMIT_FAILED =       3,
+} vbpt_txt_res_t;
 
-static inline bool
-vbpt_txtree_try_commit_merge(vbpt_txtree_t *txt, vbpt_mtree_t *mt,
-                             unsigned repeats)
+static char __attribute__((unused)) *vbpt_txt_res2str[] = {
+	[VBPT_COMMIT_OK]           =  "COMMIT OK",
+	[VBPT_COMMIT_MERGED]       =  "COMMIT MERGED",
+	[VBPT_COMMIT_MERGE_FAILED] =  "COMMIT MERGE FAILED",
+	[VBPT_COMMIT_FAILED]       =  "COMMIT FAILED"
+};
+
+
+static inline vbpt_txt_res_t
+vbpt_txt_try_commit(vbpt_txtree_t *txt, vbpt_mtree_t *mt,
+                    unsigned merge_repeats)
 {
-	bool ret = true;
+	vbpt_txt_res_t ret = VBPT_COMMIT_OK;
 	vbpt_tree_t *tx_tree = txt->tree;
 	ver_t *bver = txt->bver;
-	for (unsigned i=0; i<=repeats; i++) {
-		vbpt_tree_t *gtree;
+
+	for (unsigned i=0;;) {
+		vbpt_tree_t gtree;
 		if (vbpt_mtree_try_commit(mt, tx_tree, bver, &gtree)) {
-			vbpt_mtree_dealloc_tree(gtree);
+			vbpt_tree_destroy(&gtree);
 			goto success;
 		}
+
+		ret = VBPT_COMMIT_MERGED;
 		// try to merge (TODO: we know Vj, implement better merge)
-		if (!vbpt_merge(gtree, tx_tree, &bver)) {
+		//tmsg("trying to merge %zd to %zd\n", tx_tree->ver->v_id, gtree.ver->v_id);
+		bool ret_merge = vbpt_merge(&gtree, tx_tree, &bver);
+		vbpt_tree_destroy(&gtree);
+		if (!ret_merge) {
+			ret = VBPT_COMMIT_MERGE_FAILED;
+			break;
+		}
+
+		if (i++ == merge_repeats) {
+			ret = VBPT_COMMIT_FAILED;
 			break;
 		}
 	}
-	ret = false; // failure
-	vbpt_mtree_dealloc_tree(tx_tree);
+
+	vbpt_tree_dealloc(tx_tree);
 success:
 	free(txt);
 	return ret;

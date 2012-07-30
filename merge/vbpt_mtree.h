@@ -49,15 +49,6 @@ vbpt_mtree_alloc(vbpt_tree_t *tree)
 }
 
 static inline void
-vbpt_mtree_dealloc_tree(vbpt_tree_t *tree)
-{
-	if (vbpt_tree_log(tree)->state == VBPT_LOG_UNINITIALIZED)
-		vbpt_tree_dealloc(tree);
-	else
-		vbpt_logtree_dealloc(tree);
-}
-
-static inline void
 vbpt_mtree_destroy(vbpt_mtree_t *mtree, vbpt_tree_t **tree_ptr)
 {
 	vbpt_tree_t *tree = mtree->mt_tree;
@@ -68,7 +59,7 @@ vbpt_mtree_destroy(vbpt_mtree_t *mtree, vbpt_tree_t **tree_ptr)
 		*tree_ptr = tree;
 	} else {
 		ver_t *v = tree->ver;
-		vbpt_mtree_dealloc_tree(tree);
+		vbpt_tree_dealloc(tree);
 		ver_tree_gc(v);
 		ver_unpin(v);
 	}
@@ -88,28 +79,29 @@ vbpt_mtree_tree(vbpt_mtree_t *mtree)
  *
  * @tree:        the new version of the tree
  * @b_ver:       the version @tree is based on
- * @mt_tree_ptr: if not NULL, the old version of the tree is placed here
+ * @mt_tree_dst: if not NULL, a copy of old version of the tree is placed here
  *
- * if successful:
- *   - true is returned
- *   - if @mt_tree_ptr is NULL, vbpt_tree_dealloc() is called with the old tree
- * if unsuccessful:
- *   - false is returned
+ * if (un)successful true (false) is returned.
  *
  * @tree's refcount is not increased
+ * if @mt_tree_dst is not NULL, caller is responisble for releasing the tree
+ * using vbpt_tree_dealloc().
  */
 static inline bool
 vbpt_mtree_try_commit(vbpt_mtree_t *mtree, vbpt_tree_t *tree,
-                      ver_t *b_ver, vbpt_tree_t **mt_tree_ptr)
+                      ver_t *b_ver, vbpt_tree_t *mt_tree_dst)
 {
 	bool committed = false;
 	vbpt_tree_t *mt_tree;
 	spin_lock(&mtree->mt_lock);
 	ver_t *cur_ver = (mt_tree = mtree->mt_tree)->ver;
+	//tmsg("trying to commit ver:%zd to cur_ver:%zd\n", tree->ver->v_id, cur_ver->v_id);
 	if (ver_eq(cur_ver, b_ver)) {
 		mtree->mt_tree = tree;
 		committed = true;
 	}
+	if (mt_tree_dst)
+		vbpt_tree_copy(mt_tree_dst, mt_tree);
 	spin_unlock(&mtree->mt_lock);
 
 	// pin without holding the lock
@@ -117,10 +109,8 @@ vbpt_mtree_try_commit(vbpt_mtree_t *mtree, vbpt_tree_t *tree,
 		ver_pin(mtree->mt_tree->ver, mt_tree->ver);
 
 
-	if (mt_tree_ptr) {
-		*mt_tree_ptr = mt_tree;
-	} else if (committed) {
-		vbpt_mtree_dealloc_tree(mt_tree);
+	if (committed) {
+		vbpt_tree_dealloc(mt_tree);
 	}
 
 	return committed;

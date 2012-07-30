@@ -45,5 +45,7 @@ vbpt_log_wr_size(vbpt_log_t *log)
 	return phash_elements(&log->wr_set);
 }
 
+// XXX: for ver_release()
+void vbpt_log_destroy(vbpt_log_t *log); // destroy a log (pairs with _init)
 
 #endif /* VBPT_LOG_INTERNAL_H__ */

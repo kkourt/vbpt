@@ -1,10 +1,12 @@
+#include <stdio.h>
+#include <pthread.h>
 
 #include "ver.h"
 #include "vbpt.h"
 #include "vbpt_log.h"
 #include "vbpt_merge.h"
 #include "vbpt_mtree.h"
-#include <vbpt_tx.h>
+#include "vbpt_tx.h"
 
 #include "tsc.h"
 #include "array_size.h"
@@ -54,33 +56,7 @@ vbpt_tree_insert_bulk(vbpt_tree_t *t, uint64_t *ins, uint64_t ins_len)
 	}
 }
 
-static bool
-vbpt_mt_merge_test(vbpt_tree_t *tree,
-                   uint64_t *ins1, uint64_t ins1_len,
-                   uint64_t *ins2, uint64_t ins2_len)
-{
-	vbpt_mtree_t *mtree = vbpt_mtree_alloc(tree);
-	bool ret = true;
 
-	vbpt_txtree_t *txt1 = vbpt_txtree_alloc(mtree);
-	vbpt_txtree_t *txt2 = vbpt_txtree_alloc(mtree);
-
-	vbpt_logtree_insert_bulk(txt1->tree, ins1, ins1_len);
-	vbpt_logtree_finalize(txt1->tree);
-	bool ret1 = vbpt_txtree_try_commit(txt1, mtree);
-	assert(ret1 == true);
-
-	vbpt_logtree_insert_bulk(txt2->tree, ins2, ins2_len);
-	vbpt_logtree_finalize(txt2->tree);
-	bool ret2 = vbpt_txtree_try_commit_merge(txt2, mtree, 1);
-	assert(ret2 == true);
-
-	//ver_path_print(mtree->mt_tree->ver, stdout);
-
-	vbpt_mtree_destroy(mtree, NULL);
-
-	return ret;
-}
 
 static bool
 vbpt_merge_test(vbpt_tree_t *t,
@@ -202,73 +178,222 @@ test2(void)
 	return vbpt_merge_test(t, keys1, ARRAY_SIZE(keys1), keys2, ARRAY_SIZE(keys2));
 }
 
-static bool __attribute__((unused))
-test1_mt(void)
-{
-	uint64_t keys0[] = {42, 100};
-	uint64_t keys1[] = {66, 99, 200};
-	uint64_t keys2[] = {11};
-
-	vbpt_tree_t *t = vbpt_tree_create();
-	vbpt_tree_insert_bulk(t, keys0, ARRAY_SIZE(keys0));
-
-	return vbpt_mt_merge_test(t,
-				  keys1, ARRAY_SIZE(keys1),
-				  keys2, ARRAY_SIZE(keys2));
-}
-
 // distribution description
 struct dist_desc {
 	uint64_t r_start;
 	uint64_t r_len;
 	uint64_t nr;
 	unsigned int seed;
-	uint64_t *data;
-	uint64_t data_len;
 };
 
-static void
-generate_keys(struct dist_desc *d)
+static inline  uint64_t
+dist_rand(struct dist_desc *d, unsigned *seed)
 {
 	if (d->r_len > RAND_MAX) {
 		assert(false && "FIXME");
 	}
 
-	unsigned int seed = d->seed;
-	uint64_t data_len = sizeof(uint64_t)*d->nr;
-	if (d->data == NULL) {
-		d->data = xmalloc(data_len);
-	} else if (d->data_len != data_len) {
-		d->data = xrealloc(d->data, data_len);
+	uint64_t r = rand_r(seed);
+	return d->r_start + (r % d->r_len);
+}
+
+static void
+generate_keys(struct dist_desc *d, uint64_t **data_ptr, uint64_t *data_len)
+{
+	if (d->r_len > RAND_MAX) {
+		assert(false && "FIXME");
 	}
-	d->data_len = data_len;
+
+	uint64_t *data = *data_ptr;
+	unsigned int seed = d->seed;
+	uint64_t dlen = sizeof(uint64_t)*d->nr;
+	if (data == NULL) {
+		data = xmalloc(dlen);
+	} else if (*data_len != dlen) {
+		data = xrealloc(data, dlen);
+	}
+	*data_len = dlen;
 	for (uint64_t i=0; i<d->nr; i++) {
 		uint64_t r = (seed == 0) ? i : rand_r(&seed);
-		d->data[i] = d->r_start + (r % d->r_len);
+		data[i] = d->r_start + (r % d->r_len);
 	}
+
+	*data_ptr = data;
 }
 
 static bool __attribute__((unused))
 test_merge_rand(struct dist_desc *d0, struct dist_desc *d1, struct dist_desc *d2)
 {
-	generate_keys(d0);
-	generate_keys(d1);
-	generate_keys(d2);
+	uint64_t *data0=NULL, dlen0, *data1=NULL, dlen1, *data2=NULL, dlen2;
+	generate_keys(d0, &data0, &dlen0);
+	generate_keys(d1, &data1, &dlen1);
+	generate_keys(d2, &data2, &dlen2);
 
 	vbpt_tree_t *t = vbpt_tree_create();
-	vbpt_tree_insert_bulk(t, d0->data, d0->nr);
+	vbpt_tree_insert_bulk(t, data0, d0->nr);
 
-	return vbpt_merge_test(t, d1->data, d1->nr, d2->data, d2->nr);
+	return vbpt_merge_test(t, data1, d1->nr, data2, d2->nr);
 }
+
+struct merge_thr_stats {
+	unsigned long failures;
+	unsigned long merges;
+	unsigned long merge_failures;
+	unsigned long successes;
+	unsigned long commit_attempts;
+};
+
+struct merge_thr_arg {
+	vbpt_mtree_t            *mtree;
+	struct dist_desc        *wl;
+	pthread_barrier_t       *barrier;
+	unsigned                loops;
+	unsigned                id;
+	struct merge_thr_stats  stats;
+	uint64_t                ticks;
+};
+
+static void
+merge_thr_print_stats(struct merge_thr_arg *arg)
+{
+	printf("\tticks   :        %.1lfk\n", (double)arg->ticks/1000.0);
+	printf("\tcommit attempts: %lu\n", arg->stats.commit_attempts);
+	printf("\tsuccesses:       %lu\n", arg->stats.successes);
+	printf("\tmerges:          %lu\n", arg->stats.merges);
+	printf("\tfailures:        %lu\n", arg->stats.failures);
+	printf("\tmerge failures:  %lu\n", arg->stats.merge_failures);
+}
+
+static void
+vbpt_logtree_insert_rand(vbpt_tree_t *tree, struct dist_desc *d, unsigned *seed)
+{
+	ver_t *ver = tree->ver;
+	for (uint64_t i=0; i<d->nr; i++) {
+		uint64_t key = dist_rand(d, seed);
+		vbpt_leaf_t *leaf = vbpt_leaf_alloc(VBPT_LEAF_SIZE, ver);
+		vbpt_logtree_insert(tree, key, leaf, NULL);
+	}
+}
+
+static void
+vbpt_tree_insert_rand(vbpt_tree_t *tree, struct dist_desc *d, unsigned *seed)
+{
+	ver_t *ver = tree->ver;
+	for (uint64_t i=0; i<d->nr; i++) {
+		uint64_t key = dist_rand(d, seed);
+		vbpt_leaf_t *leaf = vbpt_leaf_alloc(VBPT_LEAF_SIZE, ver);
+		vbpt_insert(tree, key, leaf, NULL);
+	}
+}
+
+static void *
+merge_test_thr(void *arg_)
+{
+	struct merge_thr_arg *arg = (struct merge_thr_arg *)arg_;
+
+	vbpt_mtree_t *mtree = arg->mtree;
+	unsigned seed = arg->wl->seed;
+	arg->stats = (struct merge_thr_stats){0};
+	pthread_barrier_wait(arg->barrier);
+	tsc_t tsc; tsc_init(&tsc); tsc_start(&tsc);
+	for (unsigned i=0; i<arg->loops; i++) {
+		unsigned fails = 0;
+		while (1) {
+			unsigned old_seed = seed;
+			// start a transaction
+			vbpt_txtree_t *txt = vbpt_txtree_alloc(mtree);
+			//tmsg("forked %zd from %zd\n", txt->tree->ver->v_id, txt->bver->v_id);
+			vbpt_logtree_insert_rand(txt->tree, arg->wl, &seed);
+			vbpt_logtree_finalize(txt->tree);
+
+			arg->stats.commit_attempts++;
+			vbpt_txt_res_t ret = vbpt_txt_try_commit(txt, mtree, 1);
+			//tmsg("RET:%s\n", vbpt_txt_res2str[ret]);
+			if (ret == VBPT_COMMIT_FAILED) {
+				seed = old_seed;
+				fails++;
+				arg->stats.failures++;
+			} else if (ret == VBPT_COMMIT_MERGE_FAILED) {
+				seed = old_seed;
+				fails++;
+				arg->stats.merge_failures++;
+			} else if  (ret == VBPT_COMMIT_OK) {
+				arg->stats.successes++;
+				break;
+			} else if (ret == VBPT_COMMIT_MERGED) {
+				arg->stats.merges++;
+				break;
+			}
+
+			//if (fails > 32) assert(false && "Something's wrong here");
+		}
+	}
+	tsc_pause(&tsc);
+	arg->ticks = tsc_getticks(&tsc);
+	pthread_barrier_wait(arg->barrier);
+	return NULL;
+}
+
+static void
+vbpt_mt_merge_test(vbpt_tree_t *tree, unsigned nthreads, struct dist_desc *wls)
+{
+	pthread_barrier_t    barrier;
+	struct merge_thr_arg args[nthreads];
+	pthread_t            tids[nthreads];
+
+	vbpt_mtree_t *mtree = vbpt_mtree_alloc(tree);
+
+	if (pthread_barrier_init(&barrier, NULL, nthreads+1) != 0)
+		assert(false && "failed to initialize barrier");
+
+	for (unsigned i=0; i<nthreads; i++) {
+		struct merge_thr_arg *arg = args + i;
+		arg->mtree   = mtree;
+		arg->wl      = wls + i;
+		arg->barrier = &barrier;
+		arg->loops   = 16;
+		arg->id      = i;
+		pthread_create(tids+i, NULL, merge_test_thr, arg);
+	}
+
+	pthread_barrier_wait(&barrier);
+	TSC_MEASURE_TICKS(thr_ticks, {
+		pthread_barrier_wait(&barrier);
+	})
+
+	for (unsigned i=0; i<nthreads; i++) {
+		pthread_join(tids[i], NULL);
+	}
+
+	vbpt_mtree_destroy(mtree, NULL);
+	printf("total_ticks: %.1lfk\n", (double)thr_ticks/1000.0);
+	for (unsigned i=0; i<nthreads; i++) {
+		printf("stats from thread: %u\n", i);
+		merge_thr_print_stats(args+i);
+	}
+}
+
+static void __attribute__((unused))
+test_mt_rand(struct dist_desc *d0, unsigned nthreads, struct dist_desc *ds)
+{
+
+	vbpt_tree_t *tree = vbpt_tree_create();
+	unsigned seed = d0->seed;
+	vbpt_tree_insert_rand(tree, d0, &seed);
+
+	vbpt_mt_merge_test(tree, nthreads, ds);
+}
+
 
 int main(int argc, const char *argv[])
 {
 	//test1();
 	//test2();
+
 	#if 0
-	struct dist_desc d0 = { .r_start =   0, .r_len =16384, .nr = 1024,  .seed = 0, .data = NULL};
-	struct dist_desc d1 = { .r_start =   0, .r_len = 128, .nr =   16, .seed = 0, .data = NULL};
-	struct dist_desc d2 = { .r_start =   4096, .r_len = 128, .nr =  16, .seed = 0, .data = NULL};
+	struct dist_desc d0 = { .r_start =   0,    .r_len =16384, .nr = 1024, .seed = 0};
+	struct dist_desc d1 = { .r_start =   0,    .r_len =  128, .nr =   16, .seed = 0};
+	struct dist_desc d2 = { .r_start =   4096, .r_len =  128, .nr =   16, .seed = 0};
 
 	unsigned count=0, successes=0;
 	for (unsigned i=0; i<128; i++)
@@ -283,7 +408,16 @@ int main(int argc, const char *argv[])
 			}
 	printf("------> Count: %u Successes: %u\n", count, successes);
 	#endif
-	test1_mt();
+
+	#if 1
+	struct dist_desc d0 = { .r_start= 0, .r_len =16384, .nr = 1024, .seed = 0};
+	struct dist_desc ds[] = {
+		{ .r_start =    0, .r_len = 128, .nr =16, .seed = 0 },
+		{ .r_start = 4096, .r_len = 128, .nr =16, .seed = 0 }
+	};
+	//test_mt_rand(&d0, 1, ds);
+	test_mt_rand(&d0, ARRAY_SIZE(ds), ds);
+	#endif
 
 	return 0;
 }

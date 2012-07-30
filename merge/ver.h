@@ -242,6 +242,8 @@ ver_release(refcnt_t *refcnt)
 		refcnt_dec__(&parent->rfcnt_children);
 		refcnt_dec(&parent->rfcnt_total, ver_release);
 	}
+	if (ver->v_log.state != VBPT_LOG_UNINITIALIZED)
+		vbpt_log_destroy(&ver->v_log);
 	free(ver);
 }
 

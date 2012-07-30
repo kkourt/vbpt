@@ -312,6 +312,18 @@ vbpt_tree_branch_init(vbpt_tree_t *parent, vbpt_tree_t *ret)
 }
 
 /**
+ * copy a tree -- grab new references
+ *   old values are just overwritten
+ */
+void
+vbpt_tree_copy(vbpt_tree_t *dst, vbpt_tree_t *src)
+{
+	dst->ver = ver_getref(src->ver);
+	dst->root = vbpt_node_getref(src->root);
+	dst->height = src->height;
+}
+
+/**
  * branch a new tree -- grabs a reference of the root node
  */
 vbpt_tree_t *
@@ -324,15 +336,24 @@ vbpt_tree_branch(vbpt_tree_t *parent)
 
 
 /**
- * deallocate a tree descriptor
- *  decrease version reference count
+ * decrease reference counts of a tree descriptor
  */
 void
-vbpt_tree_dealloc(vbpt_tree_t *tree)
+vbpt_tree_destroy(vbpt_tree_t *tree)
 {
 	ver_putref(tree->ver);
 	if (tree->root != NULL)
 		vbpt_node_putref(tree->root);
+}
+
+/**
+ * deallocate a tree descriptor
+ *  decrease reference counts
+ */
+void
+vbpt_tree_dealloc(vbpt_tree_t *tree)
+{
+	vbpt_tree_destroy(tree);
 	free(tree);
 }
 

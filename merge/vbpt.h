@@ -94,9 +94,11 @@ vbpt_tree_t *vbpt_tree_create(void);
 vbpt_tree_t *vbpt_tree_alloc(ver_t *ver);
 void         vbpt_tree_dealloc(vbpt_tree_t *tree);
 vbpt_leaf_t *vbpt_leaf_alloc(size_t leaf_size, ver_t *ver);
-// branch a new tree
+// manage trees
 vbpt_tree_t *vbpt_tree_branch(vbpt_tree_t *parent);
 void vbpt_tree_branch_init(vbpt_tree_t *parent, vbpt_tree_t *tree);
+void vbpt_tree_copy(vbpt_tree_t *dest, vbpt_tree_t *src);
+void vbpt_tree_destroy(vbpt_tree_t *dest);
 // operations
 void vbpt_insert(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o);
 void vbpt_delete(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t **data);
