@@ -70,6 +70,17 @@ vbpt_cur_hdr(vbpt_cur_t *cur)
 
 static const vbpt_range_t vbpt_range_full = {.key = 0, .len = VBPT_KEY_MAX};
 
+void
+vbpt_cur_init(vbpt_cur_t *cur, vbpt_tree_t *tree)
+{
+	cur->tree = tree;
+	cur->path.height = 0;
+	cur->range = vbpt_range_full;
+	cur->null_maxkey = 0;
+	cur->flags.deleteme = 0;
+	cur->flags.null = 0;
+}
+
 /**
  * allocate and initialize a cursor
  */
@@ -77,12 +88,7 @@ vbpt_cur_t *
 vbpt_cur_alloc(vbpt_tree_t *tree)
 {
 	vbpt_cur_t *ret = xmalloc(sizeof(vbpt_cur_t));
-	ret->tree = tree;
-	ret->path.height = 0;
-	ret->range = vbpt_range_full;
-	ret->null_maxkey = 0;
-	ret->flags.deleteme = 0;
-	ret->flags.null = 0;
+	vbpt_cur_init(ret, tree);
 	return ret;
 }
 
@@ -838,12 +844,13 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	//dmsg("Private "); vbpt_tree_print(pt, true);
 	#endif
 
-	vbpt_cur_t *gc = vbpt_cur_alloc((vbpt_tree_t *)gt);
-	vbpt_cur_t *pc = vbpt_cur_alloc(pt);
 	#define TSC2_START() { tsc_init(&tsc2_); tsc_start(&tsc2_); }
 	#define TSC2_END()   ({tsc_pause(&tsc2_); tsc_getticks(&tsc2_);})
 
 	MergeStats.merges++;
+	vbpt_cur_t gc, pc;
+	vbpt_cur_init(&gc, (vbpt_tree_t *)gt);
+	vbpt_cur_init(&pc, pt);
 	bool merge_ok = true;
 
 	TSC2_START()
@@ -863,25 +870,25 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	        ver_str(gver), ver_str(pver), ver_str(vj));
 	#endif
 
-	while (!(vbpt_cur_end(gc) && vbpt_cur_end(pc))) {
+	while (!(vbpt_cur_end(&gc) && vbpt_cur_end(&pc))) {
 		TSC2_START();
-		vbpt_cur_sync(gc, pc);
+		vbpt_cur_sync(&gc, &pc);
 		MergeStats.cur_sync_ticks += TSC2_END();
 		TSC2_START();
-		int ret = do_merge(gc, pc, gt, pt, gver, pver, g_dist, p_dist, vj);
+		int ret = do_merge(&gc, &pc, gt, pt, gver, pver, g_dist, p_dist, vj);
 		MergeStats.do_merge_ticks += TSC2_END();
 		if (ret == -1) {
 			merge_ok = false;
 			goto end;
 		} else if (ret == 0) {
 			TSC2_START();
-			vbpt_cur_down(gc);
-			vbpt_cur_down(pc);
+			vbpt_cur_down(&gc);
+			vbpt_cur_down(&pc);
 			MergeStats.cur_down_ticks += TSC2_END();
 		} else if (ret == 1) {
 			TSC2_START();
-			vbpt_cur_next(gc);
-			vbpt_cur_next(pc);
+			vbpt_cur_next(&gc);
+			vbpt_cur_next(&pc);
 			MergeStats.cur_next_ticks += TSC2_END();
 		} else assert(false && "This should never happen");
 	}
@@ -893,8 +900,6 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 		*vbase = gver;
 	MergeStats.ver_rebase_ticks += TSC2_END();
 end:
-	vbpt_cur_free(gc);
-	vbpt_cur_free(pc);
 	tsc_pause(&tsc_); MergeStats.merge_ticks += tsc_getticks(&tsc_);
 	return merge_ok;
 
