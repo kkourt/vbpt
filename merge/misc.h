@@ -92,6 +92,6 @@ static inline pid_t gettid(void)
 	return syscall(SYS_gettid);
 }
 
-#define tmsg(fmt, args...) do { printf("%4d> " fmt, gettid(), args); } while (0)
+#define tmsg(fmt, args...) do { printf("%4d> " fmt, gettid(), ##args); } while (0)
 
 #endif /* MISC_H__ */
