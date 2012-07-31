@@ -400,10 +400,15 @@ int main(int argc, const char *argv[])
 	struct dist_desc d1 = { .r_start =   0,    .r_len =  128, .nr =   16, .seed = 0};
 	struct dist_desc d2 = { .r_start =   4096, .r_len =  128, .nr =   16, .seed = 0};
 
+	// XXX: This test works well for VBPT_NODE_SIZE=128
+	// VBPT_NODE_SIZE=128: ------> Count: 16384 Successes: 14513
+	// VBPT_NODE_SIZE=512: ------> Count: 16384 Successes: 2489
+	// need to investigate more
+	const int xsize = 128;
 	unsigned count=0, successes=0;
-	for (unsigned i=0; i<128; i++)
-		for (unsigned j=0; j<128; j++)
-			for (unsigned k=0; j<128; j++) {
+	for (unsigned i=0; i<xsize; i++)
+		for (unsigned j=0; j<xsize; j++)
+			for (unsigned k=0; j<xsize; j++) {
 				d0.seed = i;
 				d1.seed = j;
 				d2.seed = k;
