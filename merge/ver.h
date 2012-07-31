@@ -389,21 +389,20 @@ ver_leq(ver_t *ver1, ver_t *ver2)
 }
 
 /**
- * check if ver1 <= ver2 -- i.e., if ver1 is ancestor of ver2 or ver1 == ver2
- *  moves upwards (to parents) from @ver2, until it does @max_distance @steps or
- *  encounters @ver1 or NULL.
+ * check if @v_p is an ancestor of @v_ch, assuming they no more of @max_d
+ * distance.
+ *  if @v_p == @vh_ch return true
  */
 static inline bool
-ver_leq_limit(ver_t *v1, ver_t *v2, uint16_t max_distance)
+ver_is_ancestor_limit(ver_t *v_p, ver_t *v_ch, uint16_t max_d)
 {
-	ver_t *v = v2;
-	for (uint16_t i=0; v != NULL && i < max_distance; v = v->parent, i++) {
-		if (v == v1)
+	ver_t *v = v_ch;
+	for (uint16_t i=0; v != NULL && i < max_d; v = v->parent, i++) {
+		if (v == v_p)
 			return true;
 	}
 	return false;
 }
-
 
 #define VER_JOIN_FAIL ((ver_t *)(~((uintptr_t)0)))
 #define VER_JOIN_LIMIT 3
