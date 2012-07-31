@@ -100,5 +100,27 @@ vbpt_range_lt(const vbpt_range_t *r1, const vbpt_range_t *r2)
 	return vbpt_range_leq(r1, r2);
 }
 
+/* debugging */
+struct vbpt_merge_stats {
+	unsigned long gc_old;
+	unsigned long pc_old;
+	unsigned long both_null;
+	unsigned long pc_null;
+	unsigned long gc_null;
+	unsigned long merge_steps;
+	unsigned long merges;
+	unsigned long join_failed;
+	unsigned long merge_ticks;
+	unsigned long cur_down_ticks;
+	unsigned long cur_next_ticks;
+	unsigned long do_merge_ticks;
+	unsigned long ver_join_ticks;
+	unsigned long ver_rebase_ticks;
+	unsigned long cur_sync_ticks;
+};
+typedef struct vbpt_merge_stats vbpt_merge_stats_t;
+void vbpt_merge_stats_get(vbpt_merge_stats_t *stats);
+void vbpt_merge_stats_report(void);
+void vbpt_merge_stats_do_report(char *prefix, vbpt_merge_stats_t *st);
 
 #endif /* VBPT_MERGE_H */

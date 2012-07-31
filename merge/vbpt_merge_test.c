@@ -236,11 +236,12 @@ test_merge_rand(struct dist_desc *d0, struct dist_desc *d1, struct dist_desc *d2
 }
 
 struct merge_thr_stats {
-	unsigned long failures;
-	unsigned long merges;
-	unsigned long merge_failures;
-	unsigned long successes;
-	unsigned long commit_attempts;
+	unsigned long      failures;
+	unsigned long      merges;
+	unsigned long      merge_failures;
+	unsigned long      successes;
+	unsigned long      commit_attempts;
+	vbpt_merge_stats_t merge_stats;
 };
 
 struct merge_thr_arg {
@@ -256,12 +257,15 @@ struct merge_thr_arg {
 static void
 merge_thr_print_stats(struct merge_thr_arg *arg)
 {
+	struct merge_thr_stats *s = &arg->stats;
 	printf("\tticks   :        %.1lfk\n", (double)arg->ticks/1000.0);
-	printf("\tcommit attempts: %lu\n", arg->stats.commit_attempts);
-	printf("\tsuccesses:       %lu\n", arg->stats.successes);
-	printf("\tmerges:          %lu\n", arg->stats.merges);
-	printf("\tfailures:        %lu\n", arg->stats.failures);
-	printf("\tmerge failures:  %lu\n", arg->stats.merge_failures);
+	printf("\tcommit attempts: %lu\n", s->commit_attempts);
+	printf("\tsuccesses:       %lu\n", s->successes);
+	printf("\tmerges:          %lu\n", s->merges);
+	printf("\tfailures:        %lu\n", s->failures);
+	printf("\tmerge failures:  %lu\n", s->merge_failures);
+	printf("  Merge Stats:\n");
+	vbpt_merge_stats_do_report("\t", &s->merge_stats);
 }
 
 static void
@@ -331,6 +335,7 @@ merge_test_thr(void *arg_)
 	tsc_pause(&tsc);
 	arg->ticks = tsc_getticks(&tsc);
 	pthread_barrier_wait(arg->barrier);
+	vbpt_merge_stats_get(&arg->stats.merge_stats);
 	return NULL;
 }
 

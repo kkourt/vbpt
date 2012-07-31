@@ -587,6 +587,53 @@ vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree)
 	return true;
 }
 
+static __thread vbpt_merge_stats_t MergeStats = {0};
+
+void vbpt_merge_stats_get(vbpt_merge_stats_t *stats)
+{
+	*stats = MergeStats;
+}
+
+void vbpt_merge_stats_do_report(char *prefix, vbpt_merge_stats_t *st)
+{
+	#define pr_stat(x__) \
+		printf("%s" # x__ ": %lu\n", prefix, st->x__)
+
+	#define pr_merge_ratio(x__) \
+		printf("%s" # x__ ": %lu  " #x__ "/merge: %.2lf\n", \
+		       prefix, st->x__, (double)st->x__ / (double)st->merges)
+
+	#define pr_ticks(x__)    \
+		printf("%s" # x__ ": %lu (%.2lf)\n", \
+		       prefix, st->x__, \
+		       (double)st->x__/(double)st->merge_ticks)
+
+	pr_stat(join_failed);
+	pr_stat(gc_old);
+	pr_stat(pc_old);
+	pr_stat(both_null);
+	pr_stat(pc_null);
+	pr_stat(gc_null);
+	pr_stat(merges);
+	pr_merge_ratio(merge_steps);
+	pr_merge_ratio(merge_ticks);
+	pr_ticks(cur_down_ticks);
+	pr_ticks(cur_next_ticks);
+	pr_ticks(do_merge_ticks);
+	pr_ticks(ver_join_ticks);
+	pr_ticks(ver_rebase_ticks);
+	pr_ticks(cur_sync_ticks);
+
+	#undef pr_stat
+	#undef pr_merge_ratio
+	#undef pr_ticks
+}
+
+void vbpt_merge_stats_report(void)
+{
+	tmsg("Merge stats\n");
+	vbpt_merge_stats_do_report("\t", &MergeStats);
+}
 
 /**
  * helper function for merging when cursors are at the same range
@@ -608,6 +655,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
         const vbpt_tree_t *gtree, vbpt_tree_t *ptree,
         ver_t *gv, ver_t  *pv, uint16_t g_dist, uint16_t p_dist, ver_t *jv)
 {
+	MergeStats.merge_steps++;
 	assert(vbpt_range_eq(&gc->range, &pc->range));
 	ver_t *gc_v = vbpt_cur_ver(gc);
 	ver_t *pc_v = vbpt_cur_ver(pc);
@@ -632,6 +680,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		#if defined(XDEBUG_MERGE)
 		printf("NO CHANGES in gc_v\n");
 		#endif
+		MergeStats.gc_old++;
 		return 1;
 	}
 
@@ -648,6 +697,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		#if defined(XDEBUG_MERGE)
 		printf("Only gc_v changed\n");
 		#endif
+		MergeStats.pc_old++;
 		// check if private tree read something that is under the
 		// current (changed in the global tree) range. If it did,
 		// it would read an older value, so we need to abort.
@@ -675,6 +725,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	// all information on the tree is lost. It might be a good idea to make
 	// (more) formal arguments about the correctness of the cases below
 	if (vbpt_cur_null(pc) && vbpt_cur_null(gc)) {
+		MergeStats.both_null++;
 		#if defined(XDEBUG_MERGE)
 		printf("Both are NULL\n");
 		#endif
@@ -684,6 +735,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// that range.
 		return vbpt_log_rs_range_exists(plog, range, p_dist) ? -1:1;
 	} else if (vbpt_cur_null(pc)) {
+		MergeStats.pc_null++;
 		#if defined(XDEBUG_MERGE)
 		printf("pc is NULL\n");
 		#endif
@@ -696,6 +748,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		//printf("trying to replace pc with gc\n");
 		return vbpt_cur_replace(pc, gc) ? 1: -1;
 	} else if (vbpt_cur_null(gc)) {
+		MergeStats.gc_null++;
 		#if defined(XDEBUG_MERGE)
 		printf("gc is NULL\n");
 		#endif
@@ -778,6 +831,8 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 bool
 vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 {
+	tsc_t tsc_, tsc2_;
+	tsc_init(&tsc_); tsc_start(&tsc_);
 	#if defined(XDEBUG_MERGE)
 	//dmsg("Global  "); vbpt_tree_print(gt, true);
 	//dmsg("Private "); vbpt_tree_print(pt, true);
@@ -785,14 +840,21 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 
 	vbpt_cur_t *gc = vbpt_cur_alloc((vbpt_tree_t *)gt);
 	vbpt_cur_t *pc = vbpt_cur_alloc(pt);
+	#define TSC2_START() { tsc_init(&tsc2_); tsc_start(&tsc2_); }
+	#define TSC2_END()   ({tsc_pause(&tsc2_); tsc_getticks(&tsc2_);})
+
+	MergeStats.merges++;
 	bool merge_ok = true;
 
+	TSC2_START()
 	uint16_t g_dist, p_dist;
 	ver_t *hpver = NULL; // initialize to shut the compiler up
 	ver_t *gver = gt->ver;
 	ver_t *pver = pt->ver;
 	ver_t *vj = ver_join(gver, pver, &hpver, &g_dist, &p_dist);
+	MergeStats.ver_join_ticks += TSC2_END();
 	if (vj == VER_JOIN_FAIL) {
+		MergeStats.join_failed++;
 		merge_ok = false;
 		goto end;
 	}
@@ -802,28 +864,42 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	#endif
 
 	while (!(vbpt_cur_end(gc) && vbpt_cur_end(pc))) {
+		TSC2_START();
 		vbpt_cur_sync(gc, pc);
+		MergeStats.cur_sync_ticks += TSC2_END();
+		TSC2_START();
 		int ret = do_merge(gc, pc, gt, pt, gver, pver, g_dist, p_dist, vj);
+		MergeStats.do_merge_ticks += TSC2_END();
 		if (ret == -1) {
 			merge_ok = false;
 			goto end;
 		} else if (ret == 0) {
+			TSC2_START();
 			vbpt_cur_down(gc);
 			vbpt_cur_down(pc);
+			MergeStats.cur_down_ticks += TSC2_END();
 		} else if (ret == 1) {
+			TSC2_START();
 			vbpt_cur_next(gc);
 			vbpt_cur_next(pc);
+			MergeStats.cur_next_ticks += TSC2_END();
 		} else assert(false && "This should never happen");
 	}
 	/* success: fix version tree */
+	TSC2_START();
 	assert(!ver_chain_has_branch(pver, hpver));
 	ver_rebase(hpver, gver);
 	if (vbase)
 		*vbase = gver;
+	MergeStats.ver_rebase_ticks += TSC2_END();
 end:
 	vbpt_cur_free(gc);
 	vbpt_cur_free(pc);
+	tsc_pause(&tsc_); MergeStats.merge_ticks += tsc_getticks(&tsc_);
 	return merge_ok;
+
+	#undef TSC2_START
+	#undef TSC2_END
 }
 
 #if defined(VBPT_SYNC_TEST)
