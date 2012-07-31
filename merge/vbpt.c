@@ -109,19 +109,23 @@ vbpt_node_verify(vbpt_node_t *node)
 
 
 void
-vbpt_node_print(vbpt_node_t *node, int indent, bool verify)
+vbpt_node_print(vbpt_node_t *node, int indent, bool verify, int max_limit)
 {
-	printf("\n%*s" "[node=%p ->items_nr=%u ->items_total=%u imba_limit=%u] %s\n",
+	printf("%*s" "[node=%p ->items_nr=%u ->items_total=%u imba_limit=%u] %s\n",
 	        indent, " ", node,
 		node->items_nr, node->items_total, imba_limit(node),
 		vbpt_hdr_str(&node->n_hdr));
+
+	if (max_limit && max_limit*2 < indent)
+		return;
+
 	for (unsigned i=0; i < node->items_nr; i++) {
 		vbpt_kvp_t *kvp = node->kvp + i;
 		printf("%*s" "key=%5lu ", indent, " ", kvp->key);
 		if (kvp->val->type == VBPT_NODE)
-			vbpt_node_print(hdr2node(kvp->val), indent+4, verify);
+			vbpt_node_print(hdr2node(kvp->val), indent+2, verify, max_limit);
 		else
-			vbpt_leaf_print(hdr2leaf(kvp->val), indent+4);
+			vbpt_leaf_print(hdr2leaf(kvp->val), indent+2);
 	}
 
 	if (verify)
@@ -135,7 +139,18 @@ vbpt_tree_print(vbpt_tree_t *tree, bool verify)
 	if (tree->root == NULL)
 		printf("\nroot => %p\n", NULL);
 	else
-		vbpt_node_print(tree->root, 2, verify);
+		vbpt_node_print(tree->root, 2, verify, 0);
+	printf("=========================================================\n");
+}
+
+void
+vbpt_tree_print_limit(vbpt_tree_t *tree, bool verify, int max_limit)
+{
+	printf("=====| tree: %p %s ================", tree, ver_str(tree->ver));
+	if (tree->root == NULL)
+		printf("\nroot => %p\n", NULL);
+	else
+		vbpt_node_print(tree->root, 2, verify, max_limit);
 	printf("=========================================================\n");
 }
 
@@ -1066,7 +1081,7 @@ split_node(vbpt_tree_t *tree, vbpt_path_t *path)
 	if (old != NULL) {
 		fprintf(stderr, "got an old pointer: %p\n", old);
 		if (old->type == VBPT_NODE)
-			vbpt_node_print(hdr2node(old), 0, false);
+			vbpt_node_print(hdr2node(old), 0, false, 0);
 		else
 			vbpt_leaf_print(hdr2leaf(old), 0);
 

@@ -80,7 +80,8 @@ typedef struct vbpt_path vbpt_path_t;
 
 /* print functions */
 void vbpt_tree_print(vbpt_tree_t *tree, bool verify);
-void vbpt_node_print(vbpt_node_t *node, int indent, bool verify);
+void vbpt_tree_print_limit(vbpt_tree_t *tree, bool verify, int max_limit);
+void vbpt_node_print(vbpt_node_t *node, int indent, bool verify, int limit);
 void vbpt_leaf_print(vbpt_leaf_t *leaf, int indent);
 void vbpt_path_print(vbpt_path_t *path);
 char *vbpt_hdr_str(vbpt_hdr_t *hdr);
