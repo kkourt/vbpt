@@ -86,7 +86,12 @@ vbpt_range_leq(const vbpt_range_t *r1, const vbpt_range_t *r2)
 {
 	if (r1->key < r2->key)
 		return false;
-	if (r1->key + r1->len > r2->key + r2->len)
+
+	// be vewy vewy cawefull of ovewflows
+	uint64_t x = r1->key - r2->key;
+	if (x > r2->len)
+		return false;
+	if (r2->len - x < r1->len)
 		return false;
 	return true;
 }
