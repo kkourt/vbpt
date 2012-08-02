@@ -270,6 +270,8 @@ move_up:
 	} else return vbpt_cur_next(cur);
 }
 
+#define VBPT_DEBUG_CUR_NEXT
+
 /**
  * move to next node
  *  returns -1 if it's unable to proceed
@@ -282,6 +284,20 @@ vbpt_cur_next(vbpt_cur_t *cur)
 	vbpt_hdr_t *hdr = vbpt_cur_hdr(cur);
 	vbpt_path_t *path = &cur->path;
 	int ret = 0;
+	#if defined(VBPT_DEBUG_CUR_NEXT)
+	#include "array_size.h"
+	static __thread vbpt_cur_t in_[16], out_[16];
+	static __thread unsigned in_idx_ = 0, out_idx_ = 0;
+	void add_in(vbpt_cur_t *c) {
+		in_[in_idx_] = *c;
+		in_idx_ = (in_idx_ + 1) % ARRAY_SIZE(in_);
+	}
+	void add_out(vbpt_cur_t *c) {
+		out_[out_idx_] = *c;
+		out_idx_ = (out_idx_ + 1) % ARRAY_SIZE(out_);
+	}
+	add_in(cur);
+	#endif
 	//dmsg("IN  "); vbpt_cur_print(cur);
 	if (hdr->type == VBPT_LEAF) {
 		ret = vbpt_cur_next_leaf(cur);
@@ -316,7 +332,10 @@ vbpt_cur_next(vbpt_cur_t *cur)
 	}
 
 end:
-	//DMSG("ouT "); vbpt_cur_print(cur);
+	//dmsg("OUT "); vbpt_cur_print(cur);
+	#if defined(VBPT_DEBUG_CUR_NEXT)
+	add_out(cur);
+	#endif
 	return ret;
 }
 
@@ -419,8 +438,10 @@ vbpt_cur_mark_delete(vbpt_cur_t *c)
 
 	// if this is the last element, re-balancing is required.
 	// Avoid this complex case (at least for now)
-	if (pnode->items_nr == 1)
+	if (pnode->items_nr == 1) {
+		printf("mark_delete failed\n");
 		return false;
+	}
 
 	c->flags.deleteme = 1;
 	return true;
@@ -510,7 +531,7 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 	if (vbpt_cur_null(pc)) {
 		assert(p_pnode->items_nr <= p_pnode->items_total);
 		if (p_pnode->items_nr == p_pnode->items_total) {
-			//printf("pc points to NULL, and no room in node\n");
+			printf("pc points to NULL, and no room in node\n");
 			return false;
 		}
 		// slot should be OK
@@ -552,10 +573,13 @@ vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 	//dmsg("REPLACE: "); vbpt_cur_print(pc);
 	//dmsg("WITH:    "); vbpt_cur_print(gc);
 
+	bool ret;
 	if (vbpt_cur_null(gc)) {
-		return (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc));
+		ret = (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc));
+	} else {
+		ret = vbpt_cur_do_replace(pc, gc);
 	}
-	return vbpt_cur_do_replace(pc, gc);
+	return ret;
 }
 
 /**
@@ -707,8 +731,9 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// check if private tree read something that is under the
 		// current (changed in the global tree) range. If it did,
 		// it would read an older value, so we need to abort.
-		if (vbpt_log_rs_range_exists(plog, range, p_dist))
+		if (vbpt_log_rs_range_exists(plog, range, p_dist)) {
 			return -1;
+		}
 		// we need to effectively replace the node pointed by @pv with
 		// the node pointed by @gc
 		return vbpt_cur_replace(pc, gc) ? 1: -1;
@@ -725,6 +750,10 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	 #if defined(XDEBUG_MERGE)
 	 printf("Both changed\n");
 	 #endif
+	 //printf("base: %s\n", ver_str(jv));
+	 //printf("pc:"); vbpt_cur_print(pc);
+	 //printf("gc:"); vbpt_cur_print(gc);
+	 //printf("\n");
 
 	// Handle NULL cases: NULL cases are special because we lack information
 	// to precisely check for conflicts. For example, we can't go deeper --
@@ -739,7 +768,8 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// read an item from the previous state, which may not have been
 		// NULL.  We could also check whether @glog contains a delete to
 		// that range.
-		return vbpt_log_rs_range_exists(plog, range, p_dist) ? -1:1;
+		int ret = vbpt_log_rs_range_exists(plog, range, p_dist) ? -1:1;
+		return ret;
 	} else if (vbpt_cur_null(pc)) {
 		MergeStats.pc_null++;
 		#if defined(XDEBUG_MERGE)
@@ -777,6 +807,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		    !vbpt_log_rs_key_exists(plog, range->key, p_dist))
 			return 1;
 
+		printf("gc is null, I ran out of options\n");
 		return -1;
 	}
 
@@ -840,8 +871,8 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	tsc_t tsc_, tsc2_;
 	tsc_init(&tsc_); tsc_start(&tsc_);
 	#if defined(XDEBUG_MERGE)
-	//dmsg("Global  "); vbpt_tree_print(gt, true);
-	//dmsg("Private "); vbpt_tree_print(pt, true);
+	dmsg("Global  "); vbpt_tree_print_limit((vbpt_tree_t *)gt, true, 1);
+	dmsg("Private "); vbpt_tree_print_limit(pt, true, 1);
 	#endif
 
 	#define TSC2_START() { tsc_init(&tsc2_); tsc_start(&tsc2_); }
@@ -866,8 +897,8 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 		goto end;
 	}
 	#if defined(XDEBUG_MERGE)
-	printf("VERSIONS: gver:%s  pver:%s  vj:%s\n",
-	        ver_str(gver), ver_str(pver), ver_str(vj));
+	printf("VERSIONS: gver:%s  pver:%s  vj:%s g_dist:%d p_dist:%d\n",
+	        ver_str(gver), ver_str(pver), ver_str(vj), g_dist, p_dist);
 	#endif
 
 	while (!(vbpt_cur_end(&gc) && vbpt_cur_end(&pc))) {
@@ -901,6 +932,9 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	MergeStats.ver_rebase_ticks += TSC2_END();
 end:
 	tsc_pause(&tsc_); MergeStats.merge_ticks += tsc_getticks(&tsc_);
+	#if defined(XDEBUG_MERGE)
+	dmsg("MERGE %s\n", merge_ok ? "SUCCEEDED":"FAILED");
+	#endif
 	return merge_ok;
 
 	#undef TSC2_START

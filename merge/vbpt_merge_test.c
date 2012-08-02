@@ -143,6 +143,7 @@ vbpt_merge_test(vbpt_tree_t *t,
 		print_ticks(t_ins2_b, t_ins2_a);
 		print_ticks(t_merge_log, t_ins2_a);
 		print_ticks(t_merge_vbpt, t_ins2_a);
+		vbpt_merge_stats_report();
 		printf("----\n");
 	}
 	#undef print_ticks
@@ -252,6 +253,7 @@ struct merge_thr_arg {
 	unsigned                id;
 	struct merge_thr_stats  stats;
 	uint64_t                ticks;
+	spinlock_t              *lock;
 };
 
 static void
@@ -264,8 +266,8 @@ merge_thr_print_stats(struct merge_thr_arg *arg)
 	printf("\tmerges:          %lu\n", s->merges);
 	printf("\tfailures:        %lu\n", s->failures);
 	printf("\tmerge failures:  %lu\n", s->merge_failures);
-	printf("  Merge Stats:\n");
-	vbpt_merge_stats_do_report("\t", &s->merge_stats);
+	//printf("  Merge Stats:\n");
+	//vbpt_merge_stats_do_report("\t", &s->merge_stats);
 }
 
 static void
@@ -343,6 +345,7 @@ static void
 vbpt_mt_merge_test(vbpt_tree_t *tree, unsigned nthreads, struct dist_desc *wls)
 {
 	pthread_barrier_t    barrier;
+	spinlock_t           lock;
 	struct merge_thr_arg args[nthreads];
 	pthread_t            tids[nthreads];
 
@@ -351,12 +354,14 @@ vbpt_mt_merge_test(vbpt_tree_t *tree, unsigned nthreads, struct dist_desc *wls)
 	if (pthread_barrier_init(&barrier, NULL, nthreads+1) != 0)
 		assert(false && "failed to initialize barrier");
 
+	spinlock_init(&lock);
 	for (unsigned i=0; i<nthreads; i++) {
 		struct merge_thr_arg *arg = args + i;
 		arg->mtree   = mtree;
 		arg->wl      = wls + i;
 		arg->barrier = &barrier;
-		arg->loops   = 128;
+		arg->lock    = &lock;
+		arg->loops   = 1024*16;
 		arg->id      = i;
 		pthread_create(tids+i, NULL, merge_test_thr, arg);
 	}
@@ -379,8 +384,17 @@ vbpt_mt_merge_test(vbpt_tree_t *tree, unsigned nthreads, struct dist_desc *wls)
 }
 
 static void __attribute__((unused))
-test_mt_rand(struct dist_desc *d0, unsigned nthreads, struct dist_desc *ds)
+do_test_mt_rand(struct dist_desc *d0, unsigned nthreads, struct dist_desc *ds)
 {
+
+	printf("I> start:%6lu len:%6lu nr:%6lu seed:%u\n",
+	       d0->r_start, d0->r_len, d0->nr, d0->seed);
+	for (unsigned i=0; i<nthreads; i++) {
+		struct dist_desc *d = ds + i;
+		printf("%d> start:%6lu len:%6lu nr:%6lu seed:%u\n",
+		       i, d->r_start, d->r_len, d->nr, d->seed);
+	}
+
 
 	vbpt_tree_t *tree = vbpt_tree_create();
 	unsigned seed = d0->seed;
@@ -388,6 +402,30 @@ test_mt_rand(struct dist_desc *d0, unsigned nthreads, struct dist_desc *ds)
 
 	vbpt_mt_merge_test(tree, nthreads, ds);
 }
+
+static void __attribute__((unused))
+test_mt_rand(unsigned nr_threads)
+{
+	const unsigned long d0_len = 32768;
+	const unsigned long d0_nr  = (d0_len>>7); // /128
+	const unsigned long d_nr   = 16;
+	const unsigned long d_len  = 128;
+	struct dist_desc d0 = { .r_start= 0, .r_len = d0_len, .nr = d0_nr, .seed = 1};
+	struct dist_desc dt[nr_threads];
+
+	const unsigned long part_len = d0_len / nr_threads;
+	assert(part_len > d_len);
+	for (unsigned i=0; i<nr_threads; i++) {
+		struct dist_desc *d = dt + i;
+		d->r_start = part_len*i;
+		d->r_len   = d_len;
+		d->nr      = d_nr;
+		d->seed = 1;
+	}
+
+	do_test_mt_rand(&d0, nr_threads, dt);
+}
+
 
 
 int main(int argc, const char *argv[])
@@ -419,15 +457,22 @@ int main(int argc, const char *argv[])
 	printf("------> Count: %u Successes: %u\n", count, successes);
 	#endif
 
-	#if 1
-	struct dist_desc d0 = { .r_start= 0, .r_len =16384, .nr = 1024, .seed = 0};
+	#if 0
+	struct dist_desc d0 = { .r_start= 0, .r_len =16384, .nr = 4096, .seed = 1};
 	struct dist_desc ds[] = {
-		{ .r_start =    0, .r_len = 128, .nr =16, .seed = 0 },
-		{ .r_start = 4096, .r_len = 128, .nr =16, .seed = 0 }
+		{ .r_start =     0,  .r_len = 128,  .nr =16, .seed = 1},
+		{ .r_start =  1024,  .r_len = 128,  .nr =16, .seed = 1},
+		{ .r_start =  1024,  .r_len = 128,  .nr =16, .seed = 1},
+		 { .r_start = 16384,  .r_len = 128, .nr =16, .seed = 1}
 	};
-	//test_mt_rand(&d0, 1, ds);
-	test_mt_rand(&d0, ARRAY_SIZE(ds), ds);
+	//test_merge_rand(&d0, ds+0, ds+1);
+	//do_test_mt_rand(&d0, 1, ds);
+	//do_test_mt_rand(&d0, 2, ds);
 	#endif
+	char *nthreads_str = getenv("VBPT_NTHREADS");
+	unsigned nthreads = (nthreads_str) ? atoi(nthreads_str) : 2;
+	assert(nthreads > 0);
+	test_mt_rand(nthreads);
 
 	return 0;
 }

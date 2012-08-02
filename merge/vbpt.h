@@ -1,7 +1,7 @@
 #ifndef VBPT_H_
 #define VBPT_H_
-#define VBPT_NODE_SIZE 128
-#define VBPT_LEAF_SIZE 128
+#define VBPT_NODE_SIZE 512
+#define VBPT_LEAF_SIZE 1024
 #define VBPT_MAX_LEVEL 64
 
 #include <inttypes.h>

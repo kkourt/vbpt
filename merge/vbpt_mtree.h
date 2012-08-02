@@ -98,6 +98,7 @@ vbpt_mtree_try_commit(vbpt_mtree_t *mtree, vbpt_tree_t *tree,
 	ver_t *cur_ver = (mt_tree = mtree->mt_tree)->ver;
 	//tmsg("trying to commit ver:%zd to cur_ver:%zd\n", tree->ver->v_id, cur_ver->v_id);
 	if (ver_eq(cur_ver, b_ver)) {
+		//tmsg("commited ver:%zd to previous:%zd\n", tree->ver->v_id, cur_ver->v_id);
 		mtree->mt_tree = tree;
 		committed = true;
 	}

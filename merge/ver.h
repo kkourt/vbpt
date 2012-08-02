@@ -168,12 +168,15 @@ ver_str(ver_t *ver)
 	static char buff_arr[VERSTR_BUFFS_NR][VERSTR_BUFF_SIZE];
 	char *buff = buff_arr[i++ % VERSTR_BUFFS_NR];
 	#ifndef NDEBUG
+	/*
 	snprintf(buff, VERSTR_BUFF_SIZE,
 	         " [%p: ver:%3zd rfcnt_children:%3u rfcnt_total:%3u] ",
 		 ver,
 	         ver->v_id,
 		 refcnt_get(&ver->rfcnt_children),
 		 refcnt_get(&ver->rfcnt_total));
+	*/
+	snprintf(buff, VERSTR_BUFF_SIZE, " [ver:%3zd] ", ver->v_id);
 	#else
 	snprintf(buff, VERSTR_BUFF_SIZE, " (ver:%p ) ", ver);
 	#endif
@@ -405,7 +408,7 @@ ver_is_ancestor_limit(ver_t *v_p, ver_t *v_ch, uint16_t max_d)
 }
 
 #define VER_JOIN_FAIL ((ver_t *)(~((uintptr_t)0)))
-#define VER_JOIN_LIMIT 3
+#define VER_JOIN_LIMIT 64
 
 ver_t *
 ver_join_slow(ver_t *gver, ver_t *pver, ver_t **prev_pver,

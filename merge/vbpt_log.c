@@ -39,8 +39,9 @@ pset_range_exists(pset_t *pset, uint64_t key, uint64_t len)
 		for (;;) {
 			uint64_t k;
 			int ret = pset_iterate(pset, &pi, &k);
-			if (!ret)
+			if (!ret) {
 				break;
+			}
 			if (k >= key && k - key < len)
 				return true;
 		}
