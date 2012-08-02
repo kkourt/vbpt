@@ -8,7 +8,7 @@
 
 // interface
 
-typedef struct vbpt_log vbpt_log_t;
+#include "vbpt_log_internal.h"
 
 /*
  * log operations
@@ -128,6 +128,5 @@ bool vbpt_log_conflict(vbpt_log_t *log1_rd, unsigned depth1,
 
 void vbpt_log_replay(vbpt_tree_t *txt, vbpt_log_t *log, unsigned log_depth);
 
-#include "vbpt_log_internal.h"
 
 #endif
