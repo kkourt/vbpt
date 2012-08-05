@@ -157,6 +157,9 @@ vbpt_tree_print_limit(vbpt_tree_t *tree, bool verify, int max_limit)
 bool
 vbpt_path_verify(vbpt_tree_t *tree, vbpt_path_t *path)
 {
+	if (path->height == 0)
+		return true;
+
 	if (path->nodes[0] != tree->root) {
 		fprintf(stderr, "first node of the path is not root\n");
 		return false;
@@ -388,6 +391,7 @@ insert_ptr(vbpt_node_t *node, uint16_t slot, uint64_t key, vbpt_hdr_t *val)
 	assert(slot <= node->items_nr);
 	// this assumption is false: merges might add leafs with other versions
 	// TODO: maybe change the assert to an inequality about versions
+	// That won't work either, when doing merges versions are incosistent
 	//assert(node->n_hdr.ver == val->ver);
 
 	vbpt_kvp_t *kvp = node->kvp + slot;

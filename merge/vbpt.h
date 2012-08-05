@@ -85,6 +85,7 @@ void vbpt_node_print(vbpt_node_t *node, int indent, bool verify, int limit);
 void vbpt_leaf_print(vbpt_leaf_t *leaf, int indent);
 void vbpt_path_print(vbpt_path_t *path);
 char *vbpt_hdr_str(vbpt_hdr_t *hdr);
+bool vbpt_path_verify(vbpt_tree_t *tree, vbpt_path_t *path);
 
 /**
  * public interface
