@@ -417,7 +417,8 @@ insert_ptr(vbpt_node_t *node, uint16_t slot, uint64_t key, vbpt_hdr_t *val)
 
 #define insert_ptr_empty(node, slot, key, hdr)               \
 do {                                                         \
-	vbpt_hdr_t *t__ = insert_ptr(node, slot, key, hdr);  \
+	vbpt_hdr_t *t__ __attribute__((unused));             \
+	t__ = insert_ptr(node, slot, key, hdr);  \
 	assert(t__ == NULL);                                 \
 } while (0)
 
@@ -1226,7 +1227,8 @@ build_node_chain(vbpt_tree_t *tree, vbpt_path_t *path, uint64_t key)
 	uint16_t prev_slot = path->slots[path->height - 1];
 	for (uint16_t i=0; i<levels; i++) {
 		vbpt_node_t *n = vbpt_node_alloc(VBPT_NODE_SIZE, tree->ver);
-		vbpt_hdr_t *ret = insert_ptr(prev, prev_slot, key, &n->n_hdr);
+		vbpt_hdr_t *ret __attribute__((unused));
+		ret = insert_ptr(prev, prev_slot, key, &n->n_hdr);
 		assert(ret == NULL);
 		path->nodes[path->height + i] = prev      = n;
 		path->slots[path->height + i] = prev_slot = 0;

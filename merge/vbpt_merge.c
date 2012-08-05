@@ -374,6 +374,7 @@ vbpt_cur_sync(vbpt_cur_t *cur1, vbpt_cur_t *cur2)
 			vbpt_cur_print(cur1);
 			vbpt_cur_print(cur2);
 			assert(false && "ranges can't be ordered");
+			cs = cb = NULL; // shut the compiler up
 		}
 		// try to synchronize big range
 		vbpt_cur_downrange(cb, cs);
@@ -548,7 +549,8 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 		new_hdr = &(vbpt_node_chain(pc->tree, levels, p_key, new_hdr)->n_hdr);
 	}
 
-	vbpt_hdr_t *old_hdr = vbpt_insert_ptr(p_pnode, p_pslot, p_key, new_hdr);
+	vbpt_hdr_t *old_hdr __attribute__((unused));
+	old_hdr = vbpt_insert_ptr(p_pnode, p_pslot, p_key, new_hdr);
 	assert(old_hdr == p_hdr);
 	if (p_hdr) {
 		vbpt_hdr_putref(p_hdr);

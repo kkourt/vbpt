@@ -14,21 +14,21 @@
 	static inline void
 	spinlock_init(spinlock_t *lock)
 	{
-		int err = pthread_spin_init(lock, 0);
+		int err __attribute__((unused)) = pthread_spin_init(lock, 0);
 		assert(!err);
 	}
 
 	static inline void
 	spin_lock(spinlock_t *lock)
 	{
-		int err = pthread_spin_lock(lock);
+		int err __attribute__((unused)) = pthread_spin_lock(lock);
 		assert(!err);
 	}
 
 	static inline void
 	spin_unlock(spinlock_t *lock)
 	{
-		int err = pthread_spin_unlock(lock);
+		int err __attribute__((unused)) = pthread_spin_unlock(lock);
 		assert(!err);
 	}
 
