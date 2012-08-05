@@ -14,10 +14,10 @@ vbpt-test.o: vbpt.c $(hdrs)
 	$(CC) $(CFLAGS) -DVBPT_TEST $< -c -o $@
 
 vbpt-test: vbpt-test.o ver.o vbpt_log.o phash.o
-	$(CC) $(CFLAGS) $(LIBS) $^ -o $@
+	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
 
 vbpt_merge_test: vbpt_merge_test.o vbpt_merge.o vbpt_log.o vbpt.o ver.o phash.o
-	$(CC) $(CFLAGS) $(LIBS) -DVBPT_MERGE_TEST $^ -o $@
+	$(CC) $(CFLAGS) -DVBPT_MERGE_TEST $^ -o $@ $(LIBS)
 
 %.o: %.c $(hdrs)
 	$(CC) $(CFLAGS) $< -c -o $@
