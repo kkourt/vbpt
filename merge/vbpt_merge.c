@@ -708,7 +708,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	 *          /     (pv)
 	 *        (gv)
 	 */
-	if (!ver_is_ancestor_limit(gc_v, gv, g_dist)) {
+	if (!ver_ancestor_limit(gc_v, gv, g_dist - 1)) {
 		#if defined(XDEBUG_MERGE)
 		printf("NO CHANGES in gc_v\n");
 		#endif
@@ -725,7 +725,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	 *          /     (pv)
 	 *        (gv)
 	 */
-	if (!ver_is_ancestor_limit(pc_v, pv, p_dist)) {
+	if (!ver_ancestor_limit(pc_v, pv, p_dist - 1)) {
 		#if defined(XDEBUG_MERGE)
 		printf("Only gc_v changed\n");
 		#endif

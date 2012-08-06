@@ -391,15 +391,52 @@ ver_leq(ver_t *ver1, ver_t *ver2)
 	return false;
 }
 
+static inline bool
+ver_ancestor(ver_t *v_p, ver_t *v_ch)
+{
+	for (ver_t *v = v_ch; v != NULL; v = v->parent) {
+		if (v == v_p)
+			return true;
+	}
+	return false;
+}
+
 /**
- * check if @v_p is an ancestor of @v_ch, assuming they no more of @max_d
+ * check if @v_p is an ancestor of @v_ch, assuming they have no more of @max_d
  * distance.
- *  if @v_p == @vh_ch return true
+ *  if @v_p == @v_ch the function returns true
  */
 static inline bool
-ver_is_ancestor_limit(ver_t *v_p, ver_t *v_ch, uint16_t max_d)
+ver_ancestor_limit(ver_t *v_p, ver_t *v_ch, uint16_t max_d)
 {
 	ver_t *v = v_ch;
+	for (uint16_t i=0; v != NULL && i < max_d + 1; v = v->parent, i++) {
+		if (v == v_p)
+			return true;
+	}
+	return false;
+}
+
+static inline bool
+ver_ancestor_strict(ver_t *v_p, ver_t *v_ch)
+{
+	for (ver_t *v = v_ch->parent; v != NULL; v = v->parent) {
+		if (v == v_p)
+			return true;
+	}
+	return false;
+}
+
+/* check if @v_p is an ancestor of @v_ch, assuming they have no more of @max_d
+ * distance.
+ *  if @v_p == @v_ch the function returns false
+ */
+static inline bool
+ver_ancestor_strict_limit(ver_t *v_p, ver_t *v_ch, uint16_t max_d)
+{
+	if (v_p == v_ch)
+		return false;
+	ver_t *v = v_ch->parent;
 	for (uint16_t i=0; v != NULL && i < max_d; v = v->parent, i++) {
 		if (v == v_p)
 			return true;
