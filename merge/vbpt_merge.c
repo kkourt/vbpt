@@ -11,6 +11,7 @@
 #define VBPT_KEY_MAX UINT64_MAX
 
 //#define XDEBUG_MERGE
+static __thread vbpt_merge_stats_t MergeStats = {0};
 
 // forward declaration
 static inline void vbpt_cur_maybe_delete(vbpt_cur_t *c);
@@ -40,6 +41,24 @@ static inline void vbpt_cur_maybe_delete(vbpt_cur_t *c);
  * If ->flags.null is 1, cursor is currently in a null range and its maximum
  * value is ->null_maxkey
  */
+
+static inline char *
+vbpt_cur_str(vbpt_cur_t *cur)
+{
+	#define CURSTR_BUFF_SIZE 128
+	#define CURSTR_BUFFS_NR   16
+	static int i=0;
+	static char buff_arr[CURSTR_BUFFS_NR][CURSTR_BUFF_SIZE];
+	char *buff = buff_arr[i++ % CURSTR_BUFFS_NR];
+	snprintf(buff, CURSTR_BUFF_SIZE,
+	       "C: range:[%4lu+%4lu] null:%u null_max_key:%4lu v:%s",
+	       cur->range.key, cur->range.len,
+	       cur->flags.null, cur->null_maxkey,
+	       ver_str(vbpt_cur_ver((vbpt_cur_t *)cur)));
+	return buff;
+	#undef CURSTR_BUFF_SIZE
+	#undef CURSTR_BUFFS_NR
+}
 
 void
 vbpt_cur_print(const vbpt_cur_t *cur)
@@ -225,7 +244,7 @@ vbpt_cur_next_leaf(vbpt_cur_t *cur)
 			cur->flags.null = 0;
 			goto next_key;
 		}
-	} else if (nslot + 1  == n->items_nr) {
+	} else if (nslot + 1 == n->items_nr) {
 		// no more keys in this node, we need to pop and return to the
 		// parent node
 		goto move_up;
@@ -270,8 +289,6 @@ move_up:
 	} else return vbpt_cur_next(cur);
 }
 
-#define VBPT_DEBUG_CUR_NEXT
-
 /**
  * move to next node
  *  returns -1 if it's unable to proceed
@@ -284,21 +301,10 @@ vbpt_cur_next(vbpt_cur_t *cur)
 	vbpt_hdr_t *hdr = vbpt_cur_hdr(cur);
 	vbpt_path_t *path = &cur->path;
 	int ret = 0;
-	#if defined(VBPT_DEBUG_CUR_NEXT)
-	#include "array_size.h"
-	static __thread vbpt_cur_t in_[16], out_[16];
-	static __thread unsigned in_idx_ = 0, out_idx_ = 0;
-	void add_in(vbpt_cur_t *c) {
-		in_[in_idx_] = *c;
-		in_idx_ = (in_idx_ + 1) % ARRAY_SIZE(in_);
-	}
-	void add_out(vbpt_cur_t *c) {
-		out_[out_idx_] = *c;
-		out_idx_ = (out_idx_ + 1) % ARRAY_SIZE(out_);
-	}
-	add_in(cur);
-	#endif
 	//dmsg("IN  "); vbpt_cur_print(cur);
+	#if !defined(NDEBUG)
+	uint64_t new_range_start = cur->range.key + cur->range.len;
+	#endif
 	if (hdr->type == VBPT_LEAF) {
 		ret = vbpt_cur_next_leaf(cur);
 		goto end;
@@ -333,8 +339,12 @@ vbpt_cur_next(vbpt_cur_t *cur)
 
 end:
 	//dmsg("OUT "); vbpt_cur_print(cur);
-	#if defined(VBPT_DEBUG_CUR_NEXT)
-	add_out(cur);
+	#if !defined(NDEBUG)
+	if (cur->range.key != new_range_start) {
+		fprintf(stderr, "cur->range.key=%lu new_range_start=%lu\n",
+		        cur->range.key, new_range_start);
+		assert(false);
+	}
 	#endif
 	return ret;
 }
@@ -476,30 +486,30 @@ vbpt_cur_height(const vbpt_cur_t *cur)
  * @pc could point to NULL. In that case, the item is inserted only if there are
  * available items on the parent node.
  *
- * XXX: Should we check for COW?
+ * We need to (potentially) update the path:
+ *  - if we add a chain of nodes, we need to add them to the path
+ *  - we need to remove flags.null, since now we have a node
+ *
+ * XXX: Should we check for COW? -- yes
  * XXX: Think about versioning issues -- i.e., two nodes on the tree P and C,
  * where P points to C then ver(P) > ver(C).
- * XXX: Make this cleaner
+ * XXX: Clean this up
  */
 static bool
-vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
+vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
+                    ver_t *jv, uint16_t p_dist)
 {
 	assert(!vbpt_cur_null(gc));
 	uint16_t p_height = vbpt_cur_height(pc);
 	uint16_t g_height = vbpt_cur_height(gc);
+	assert(vbpt_cur_hdr(pc) != vbpt_cur_hdr((vbpt_cur_t *)gc));
 
 	if (g_height > p_height) {
-		printf("g_height > p_height: bailing out\n");
+		//printf("g_height > p_height: bailing out\n");
 		return false; // TODO
 	}
 
-
-	// key to insetr new node:
-	//  - if this is a leaf, use the start of the range
-	//  - if this is an internal node use the maximum val
-	// [Maybe rethink about range representation]
-	uint64_t p_key = (pc->range.len == 1) ? pc->range.key : pc->range.key + pc->range.len;
-	p_key = pc->range.key + pc->range.len - 1;
+	uint64_t p_key = pc->range.key + pc->range.len - 1;
 
 	#if !defined(NDEBUG)
 	assert(gc->path.height > 0);
@@ -529,24 +539,40 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 		p_pslot = pc->path.slots[pc->path.height - 1];
 	}
 
+	// check if COW is needed
+	ver_t *p_pver = p_pnode->n_hdr.ver;
+	if (!ver_ancestor_strict_limit(jv, p_pver, p_dist)) {
+		return -1;
+	}
+	assert(refcnt_get(&p_pnode->n_hdr.h_refcnt) == 1);
+
 	if (vbpt_cur_null(pc)) {
 		assert(p_pnode->items_nr <= p_pnode->items_total);
+
 		if (p_pnode->items_nr == p_pnode->items_total) {
-			printf("pc points to NULL, and no room in node\n");
+			//printf("pc points to NULL, and no room in node\n");
 			return false;
 		}
+
 		// slot should be OK
 	} else {
 		if (pc->path.height != 0)
 			p_hdr = vbpt_cur_hdr(pc);
 	}
 
+	// in this case, the rightmost value changes, so we need to update the
+	// parent chain, which we don't currently do.
+	if (p_pslot == p_pnode->items_nr && pc->path.height != 0) {
+		return false;
+	}
 
 	vbpt_hdr_t  *g_hdr = vbpt_cur_hdr((vbpt_cur_t *)gc);
+	assert(g_hdr != p_hdr);
 	vbpt_hdr_t *new_hdr = vbpt_hdr_getref(g_hdr);
 	if (p_height > g_height) { // add a sufficiently large chain of nodes
 		uint16_t levels = p_height - g_height;
 		new_hdr = &(vbpt_node_chain(pc->tree, levels, p_key, new_hdr)->n_hdr);
+		assert(false && "need to fix the path");
 	}
 
 	vbpt_hdr_t *old_hdr __attribute__((unused));
@@ -559,9 +585,13 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
 		if (pc->path.height != 0) {
 			pc->null_maxkey = 0;
 			pc->flags.null = 0;
+		} else {
+			assert(false && "Need to fix the path?");
 		}
 	}
 
+	assert(pc->flags.null == 0);
+	assert(vbpt_cur_hdr(pc) == new_hdr);
 	return true;
 }
 
@@ -570,17 +600,19 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
  *   if unsuccessful, return false
  */
 bool
-vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc)
+vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
+                 ver_t *jv, uint16_t p_dist)
 {
 	//dmsg("REPLACE: "); vbpt_cur_print(pc);
 	//dmsg("WITH:    "); vbpt_cur_print(gc);
-
+	//tmsg("REPLACE %s WITH %s\n", vbpt_cur_str(pc), vbpt_cur_str((vbpt_cur_t *)gc));
 	bool ret;
 	if (vbpt_cur_null(gc)) {
 		ret = (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc));
 	} else {
-		ret = vbpt_cur_do_replace(pc, gc);
+		ret = vbpt_cur_do_replace(pc, gc, jv, p_dist);
 	}
+
 	return ret;
 }
 
@@ -619,7 +651,6 @@ vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree)
 	return true;
 }
 
-static __thread vbpt_merge_stats_t MergeStats = {0};
 
 void vbpt_merge_stats_get(vbpt_merge_stats_t *stats)
 {
@@ -692,9 +723,11 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	ver_t *gc_v = vbpt_cur_ver(gc);
 	ver_t *pc_v = vbpt_cur_ver(pc);
 	#if defined(XDEBUG_MERGE)
-	dmsg("\n\trange: %4lu,+%3lu\n\tgc_v:%s\n\tpc_v:%s\n",
+	tmsg("range: %4lu,+%3lu gc_v:%s \tpc_v:%s\n",
 	      gc->range.key, gc->range.len, ver_str(gc_v), ver_str(pc_v));
 	#endif
+	assert(g_dist > 0);
+	assert(p_dist > 0);
 	vbpt_log_t *plog = vbpt_tree_log(ptree);
 	vbpt_log_t *glog = vbpt_tree_log((vbpt_tree_t *)gtree);
 	vbpt_range_t *range = &pc->range;
@@ -736,9 +769,10 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		if (vbpt_log_rs_range_exists(plog, range, p_dist)) {
 			return -1;
 		}
+		//assert(pc_v != gc_v);
 		// we need to effectively replace the node pointed by @pv with
 		// the node pointed by @gc
-		return vbpt_cur_replace(pc, gc) ? 1: -1;
+		return vbpt_cur_replace(pc, gc, jv, p_dist) ? 1: -1;
 	}
 
 	/*
@@ -784,7 +818,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		if (vbpt_log_ds_range_exists(plog, range, p_dist))
 			return -1;
 		//printf("trying to replace pc with gc\n");
-		return vbpt_cur_replace(pc, gc) ? 1: -1;
+		return vbpt_cur_replace(pc, gc, jv, p_dist) ? 1: -1;
 	} else if (vbpt_cur_null(gc)) {
 		MergeStats.gc_null++;
 		#if defined(XDEBUG_MERGE)
@@ -904,6 +938,8 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	#endif
 
 	while (!(vbpt_cur_end(&gc) && vbpt_cur_end(&pc))) {
+		assert(vbpt_path_verify((vbpt_tree_t *)gt, &gc.path));
+		assert(vbpt_path_verify(pt, &pc.path));
 		TSC2_START();
 		vbpt_cur_sync(&gc, &pc);
 		MergeStats.cur_sync_ticks += TSC2_END();
@@ -931,6 +967,8 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	ver_rebase(hpver, gver);
 	if (vbase)
 		*vbase = gver;
+	assert(ver_ancestor(gver, pver));
+	assert(ver_ancestor(gver, hpver));
 	MergeStats.ver_rebase_ticks += TSC2_END();
 end:
 	tsc_pause(&tsc_); MergeStats.merge_ticks += tsc_getticks(&tsc_);

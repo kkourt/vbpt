@@ -407,7 +407,7 @@ static void __attribute__((unused))
 test_mt_rand(unsigned nr_threads)
 {
 	const unsigned long d0_len = 32768;
-	const unsigned long d0_nr  = (d0_len>>7); // /128
+	const unsigned long d0_nr  = (d0_len>>3); // /128
 	const unsigned long d_nr   = 16;
 	const unsigned long d_len  = 128;
 	struct dist_desc d0 = { .r_start= 0, .r_len = d0_len, .nr = d0_nr, .seed = 1};
