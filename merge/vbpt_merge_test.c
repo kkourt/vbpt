@@ -10,6 +10,7 @@
 
 #include "tsc.h"
 #include "array_size.h"
+#include "mt_lib.h"
 
 #if 0
 static void __attribute__((unused))
@@ -251,6 +252,7 @@ struct merge_thr_arg {
 	pthread_barrier_t       *barrier;
 	unsigned                loops;
 	unsigned                id;
+	unsigned                cpu;
 	struct merge_thr_stats  stats;
 	uint64_t                ticks;
 	spinlock_t              *lock;
@@ -300,6 +302,7 @@ merge_test_thr(void *arg_)
 	vbpt_mtree_t *mtree = arg->mtree;
 	unsigned seed = arg->wl->seed;
 	arg->stats = (struct merge_thr_stats){0};
+	setaffinity_oncpu(arg->cpu);
 	pthread_barrier_wait(arg->barrier);
 	tsc_t tsc; tsc_init(&tsc); tsc_start(&tsc);
 	for (unsigned i=0; i<arg->loops; i++) {
@@ -342,7 +345,9 @@ merge_test_thr(void *arg_)
 }
 
 static void
-vbpt_mt_merge_test(vbpt_tree_t *tree, unsigned nthreads, struct dist_desc *wls)
+vbpt_mt_merge_test(vbpt_tree_t *tree,
+                   unsigned nthreads, unsigned *cpus,
+                   struct dist_desc *wls)
 {
 	pthread_barrier_t    barrier;
 	spinlock_t           lock;
@@ -363,6 +368,7 @@ vbpt_mt_merge_test(vbpt_tree_t *tree, unsigned nthreads, struct dist_desc *wls)
 		arg->lock    = &lock;
 		arg->loops   = 1024*16;
 		arg->id      = i;
+		arg->cpu     = cpus[i];
 		pthread_create(tids+i, NULL, merge_test_thr, arg);
 	}
 
@@ -384,7 +390,9 @@ vbpt_mt_merge_test(vbpt_tree_t *tree, unsigned nthreads, struct dist_desc *wls)
 }
 
 static void __attribute__((unused))
-do_test_mt_rand(struct dist_desc *d0, unsigned nthreads, struct dist_desc *ds)
+do_test_mt_rand(struct dist_desc *d0,
+                unsigned nthreads, unsigned *cpus,
+                struct dist_desc *ds)
 {
 
 	printf("I> start:%6lu len:%6lu nr:%6lu seed:%u\n",
@@ -400,11 +408,11 @@ do_test_mt_rand(struct dist_desc *d0, unsigned nthreads, struct dist_desc *ds)
 	unsigned seed = d0->seed;
 	vbpt_tree_insert_rand(tree, d0, &seed);
 
-	vbpt_mt_merge_test(tree, nthreads, ds);
+	vbpt_mt_merge_test(tree, nthreads, cpus, ds);
 }
 
 static void __attribute__((unused))
-test_mt_rand(unsigned nr_threads)
+test_mt_rand(unsigned nr_threads, unsigned *cpus)
 {
 	const unsigned long d0_len = 32768;
 	const unsigned long d0_nr  = (d0_len>>3); // /128
@@ -423,7 +431,7 @@ test_mt_rand(unsigned nr_threads)
 		d->seed = 1;
 	}
 
-	do_test_mt_rand(&d0, nr_threads, dt);
+	do_test_mt_rand(&d0, nr_threads, cpus, dt);
 }
 
 
@@ -469,10 +477,14 @@ int main(int argc, const char *argv[])
 	//do_test_mt_rand(&d0, 1, ds);
 	//do_test_mt_rand(&d0, 2, ds);
 	#endif
-	char *nthreads_str = getenv("VBPT_NTHREADS");
-	unsigned nthreads = (nthreads_str) ? atoi(nthreads_str) : 2;
-	assert(nthreads > 0);
-	test_mt_rand(nthreads);
+	unsigned int ncpus, *cpus;
+	mt_get_options(&ncpus, &cpus);
+	printf("Using %u cpus: ", ncpus);
+	for (unsigned int i=0; i<ncpus; i++)
+		printf("%d ", cpus[i]);
+	printf("\n");
+
+	test_mt_rand(ncpus, cpus);
 
 	return 0;
 }

@@ -16,7 +16,7 @@ vbpt-test.o: vbpt.c $(hdrs)
 vbpt-test: vbpt-test.o ver.o vbpt_log.o phash.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
 
-vbpt_merge_test: vbpt_merge_test.o vbpt_merge.o vbpt_log.o vbpt.o ver.o phash.o
+vbpt_merge_test: vbpt_merge_test.o vbpt_merge.o vbpt_log.o vbpt.o ver.o phash.o mt_lib.o
 	$(CC) $(CFLAGS) -DVBPT_MERGE_TEST $^ -o $@ $(LIBS)
 
 ver_test: ver_test.c ver.c $(hdrs)
