@@ -10,7 +10,7 @@ int main(int argc, const char *argv[])
 {
 	ver_t *v0 = ver_create();
 	ver_t *v1 = ver_branch(v0);
-	ver_t *v2 = ver_branch(v1);
+	ver_t *v2 __attribute__((unused)) = ver_branch(v1);
 
 	assert(ver_ancestor(v0, v0));
 	assert(ver_ancestor(v0, v1));

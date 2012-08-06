@@ -279,8 +279,10 @@ ver_tree_gc(ver_t *ver)
 		// try to get a the refcount. If it's not possible somebody else
 		// runs the collector and has the lock, so just bail out.
 		uint32_t children;
-		if (!refcnt_try_get(&ver_p->rfcnt_children, &children))
+		if (!refcnt_try_get(&ver_p->rfcnt_children, &children)) {
 			assert(false && "This shouldn't happen"); // CHECKME: this has triggered
+			return;
+		}
 		assert(children > 0);
 
 		// found a branch, reset the head of the chain

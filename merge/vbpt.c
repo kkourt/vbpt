@@ -624,7 +624,7 @@ move_items_from_left(vbpt_tree_t *tree,
 	node->items_nr += mv_items;
 
 	if (left->items_nr == 0) {
-		vbpt_hdr_t *d;
+		vbpt_hdr_t __attribute__((unused)) *d;
 		d = delete_ptr(tree, pnode, pnode_slot -1, path, path->height - 2);
 		assert(get_left_sibling(node, path) != left);
 		assert(d == &left->n_hdr);
@@ -667,7 +667,7 @@ move_items_from_right(vbpt_tree_t *tree,
 	if (right->items_nr > 0) {
 		kvpmove(right->kvp, right->kvp + mv_items, right->items_nr);
 	} else {
-		vbpt_hdr_t  *d;
+		vbpt_hdr_t __attribute__((unused)) *d;
 		d = delete_ptr(tree, pnode, pnode_slot +1, path, path->height - 2);
 		assert(d == &right->n_hdr);
 		vbpt_node_putref(right);
@@ -715,7 +715,7 @@ move_items_left(vbpt_tree_t *tree,
 		kvpmove(node->kvp, node->kvp + mv_items, node_items);
 		node->items_nr = node_items;
 	} else {                 // node is now empty
-		vbpt_hdr_t *d;
+		vbpt_hdr_t __attribute__((unused)) *d;
 		node->items_nr = 0;
 		d = delete_ptr(tree, pnode, pnode_slot, path, path->height - 2);
 		assert(d == &node->n_hdr);
@@ -770,7 +770,7 @@ move_items_right(vbpt_tree_t *tree,
 	// update @node
 	uint16_t delete_node = 0;
 	if (node->items_nr == 0) {
-		vbpt_hdr_t *d;
+		vbpt_hdr_t __attribute__((unused)) *d;
 		d = delete_ptr(tree, pnode, pnode_slot, path, path->height -2);
 		assert(d == &node->n_hdr);
 		delete_node = 1;
@@ -838,7 +838,7 @@ move_items_left_right(vbpt_tree_t *tree, vbpt_node_t  *node,
 
 	uint16_t node_deleted = 0;
 	if (node->items_nr == 0) {
-		vbpt_hdr_t *d;
+		vbpt_hdr_t __attribute__((unused)) *d;
 		d = delete_ptr(tree, pnode, pnode_slot, path, path->height -2);
 		assert(d == &node->n_hdr);
 		node_deleted = 1;
