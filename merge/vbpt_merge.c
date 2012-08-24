@@ -14,7 +14,7 @@
 static __thread vbpt_merge_stats_t MergeStats = {0};
 
 // forward declaration
-static inline void vbpt_cur_maybe_delete(vbpt_cur_t *c);
+static inline int vbpt_cur_maybe_delete(vbpt_cur_t *c);
 
 /**
  * IDEAS:
@@ -173,7 +173,7 @@ vbpt_cur_down(vbpt_cur_t *cur)
 
 	// update the range by reducing the length
 	if (vbpt_cur_hdr(cur)->type == VBPT_NODE) {
-		assert(node_key0 - cur->range.key);
+		assert(node_key0 > cur->range.key);
 		cur->range.len = node_key0 - cur->range.key + 1;
 	} else if (node_key0 > cur->range.key) {
 		// last-level, where we need to insert a NULL area
@@ -206,87 +206,150 @@ vbpt_cur_downrange(vbpt_cur_t *cur, const vbpt_cur_t *cur2)
 	} while (vbpt_range_lt(r, &cur->range));
 }
 
+static void
+vbpt_cur_verify(vbpt_cur_t *cur)
+{
+	vbpt_path_t *path = &cur->path;
+
+	if (path->height == 0) {
+		assert(cur->flags.null);
+		assert(cur->null_maxkey = VBPT_KEY_MAX);
+		return;
+	}
+
+	uint16_t nslot = path->slots[path->height -1];
+	vbpt_node_t *node = path->nodes[path->height -1];
+	assert(nslot < node->items_nr);
+	uint64_t node_key = node->kvp[nslot].key;
+	if (cur->flags.null) {
+		assert(node_key == cur->null_maxkey + 1);
+	} else {
+		assert(node_key == cur->range.key + cur->range.len - 1);
+	}
+}
+
+static void
+vbpt_cur_next_verify(vbpt_cur_t *ocur, vbpt_cur_t *cur)
+{
+	if (cur->range.key != ocur->range.key + ocur->range.len) {
+		fprintf(stderr,
+		        "cur->range.key=%lu new_range_start=%lu\n",
+		        cur->range.key, ocur->range.key + ocur->range.len);
+		assert(false);
+	}
+	vbpt_cur_verify(cur);
+}
+
+#if !defined(NDEBUG)
+# define CUR_NEXT_CHECK_BEGIN(cur) vbpt_cur_t ocur__ =  *cur
+# define CUR_NEXT_CHECK_END(cur)   vbpt_cur_next_verify(&ocur__, cur)
+#else
+# define CUR_NEXT_CHECK_BEGIN(cur)
+# define CUR_NEXT_CHECK_END(cur)
+#endif
+
+/**
+ * the cursor is pointing to a leaf and is NULL
+ */
+static int
+vbpt_cur_next_leaf_null(vbpt_cur_t *cur)
+{
+	CUR_NEXT_CHECK_BEGIN(cur);
+	assert(!cur->flags.deleteme);
+	uint64_t range_last_key = cur->range.key + cur->range.len - 1;
+	assert(range_last_key <= cur->null_maxkey);
+
+	// if the curent NULL range has not ended, just update the cursor to the
+	// remaining NULL range.
+	if (range_last_key < cur->null_maxkey) {
+		cur->range.key = range_last_key + 1;
+		cur->range.len = cur->null_maxkey - range_last_key;
+		CUR_NEXT_CHECK_END(cur);
+		return 0;
+	}
+
+	// The NULL range has ended
+	vbpt_path_t *path = &cur->path;
+	assert(path->height > 0);
+	uint16_t nslot = path->slots[path->height -1];
+	vbpt_node_t *node = path->nodes[path->height -1];
+	assert(nslot < node->items_nr);
+	assert(node->kvp[nslot].key == range_last_key + 1);
+	cur->range.key = range_last_key + 1;
+	cur->range.len = 1;
+	cur->null_maxkey = 0;
+	cur->flags.null = 0;
+
+	CUR_NEXT_CHECK_END(cur);
+	return 0;
+}
+
+static int
+vbpt_cur_next_leaf_ascend(vbpt_cur_t *cur)
+{
+	CUR_NEXT_CHECK_BEGIN(cur);
+	assert(!cur->flags.deleteme);
+	vbpt_path_t *path = &cur->path;
+	assert(path->height > 0);
+	if (--path->height == 0) {
+		cur->range.key = cur->range.key + cur->range.len;
+		cur->range.len = VBPT_KEY_MAX - cur->range.key;
+		cur->flags.null = 1;
+		cur->null_maxkey = VBPT_KEY_MAX;
+		CUR_NEXT_CHECK_END(cur);
+		return 0;
+	} else {
+		return vbpt_cur_next(cur);
+	}
+}
+
 /**
 * the cursor is pointing to a leaf, move to the next node
 */
 static int
 vbpt_cur_next_leaf(vbpt_cur_t *cur)
 {
+	if (vbpt_cur_null(cur))
+		return vbpt_cur_next_leaf_null(cur);
+
 	vbpt_path_t *path = &cur->path;
 	assert(path->height > 0);
 	vbpt_node_t *n = path->nodes[path->height -1];
 	uint16_t nslot = path->slots[path->height -1];
 	assert(nslot < n->items_nr);
 	assert(vbpt_cur_hdr(cur)->type == VBPT_LEAF);
+	assert(cur->range.len == 1);
+	assert(cur->range.key == n->kvp[nslot].key);
 
-	if (vbpt_cur_null(cur)) {
-		assert(!cur->flags.deleteme);
-		// cursor pointing to NULL already:
-		uint64_t r_last = cur->range.key + cur->range.len - 1;
-		assert(r_last <= cur->null_maxkey);
-		if (r_last < cur->null_maxkey) {
-			// if the curent NULL range has not ended, just update
-			// the cursor to the remaining NULL range.
-			cur->range.key = r_last + 1;
-			cur->range.len = cur->null_maxkey - r_last;
-			return 0;
-		} else if (nslot == n->items_nr) {
-			// if the current NULL range has ended, but there are no
-			// more items in this node, pop and return to the parent
-			// node.  XXX: On second thought, I don't think  that's
-			// possible
-			assert(false);
-			goto move_up;
-		} else {
-			// if the current NULL range has ended, and there are
-			// more items to the next key
-			cur->null_maxkey = 0;
-			cur->flags.null = 0;
-			goto next_key;
-		}
-	} else if (nslot + 1 == n->items_nr) {
-		// no more keys in this node, we need to pop and return to the
-		// parent node
-		goto move_up;
+	// no more space in this node, need to move up
+	if (nslot + 1 == n->items_nr)
+		return vbpt_cur_next_leaf_ascend(cur);
+
+	CUR_NEXT_CHECK_BEGIN(cur);
+	uint64_t next_key = n->kvp[nslot+1].key;
+	int del = vbpt_cur_maybe_delete(cur);
+	uint16_t next_slot = nslot + 1 - del;
+	assert(n->kvp[next_slot].key == next_key);
+	if (next_key == cur->range.key + 1) {
+		// if the current and next key are sequential, we can just move
+		// to the next key
+		path->slots[path->height - 1] = next_slot;
+		cur->range.key = n->kvp[next_slot].key;
+		cur->range.len = 1;
+		CUR_NEXT_CHECK_END(cur);
 	} else {
-		assert(cur->range.len == 1);
-		assert(cur->range.key == n->kvp[nslot].key);
-		uint64_t next_key = n->kvp[nslot+1].key;
-		vbpt_cur_maybe_delete(cur);
-		if (next_key == cur->range.key + 1) {
-			// if the current and next key are sequential, we can
-			// just move to the next key
-			nslot = nslot + 1;
-			goto next_key;
-		} else {
-			// if there is range space between the current and the
-			// next key, it is NULL space and we need to account for
-			// it. Note that nslot for null values points to the
-			// next node
-			path->slots[path->height - 1] = nslot + 1;
-			cur->flags.null = 1;
-			cur->null_maxkey = next_key - 1;
-			cur->range.key += 1;
-			cur->range.len = next_key - cur->range.key;
-			return 0;
-		}
-	}
-	assert(false && "How did I end up here?");
-
-next_key:
-	path->slots[path->height - 1] = nslot;
-	cur->range.key = n->kvp[nslot].key;
-	cur->range.len = 1;
-	return 0;
-
-move_up:
-	if (--path->height == 0) {
-		cur->range.key = cur->range.key + cur->range.len;
-		cur->range.len = VBPT_KEY_MAX - cur->range.key;
+		// if there is range space between the current and the next key,
+		// it is NULL space and we need to account for it. Note that
+		// nslot for null values points to the next node
+		path->slots[path->height - 1] = next_slot;
 		cur->flags.null = 1;
-		cur->null_maxkey = VBPT_KEY_MAX;
-		return 0;
-	} else return vbpt_cur_next(cur);
+		cur->null_maxkey = next_key - 1;
+		cur->range.key += 1;
+		cur->range.len = next_key - cur->range.key;
+		CUR_NEXT_CHECK_END(cur);
+	}
+
+	return 0;
 }
 
 /**
@@ -300,36 +363,39 @@ vbpt_cur_next(vbpt_cur_t *cur)
 {
 	vbpt_hdr_t *hdr = vbpt_cur_hdr(cur);
 	vbpt_path_t *path = &cur->path;
-	int ret = 0;
 	//dmsg("IN  "); vbpt_cur_print(cur);
-	#if !defined(NDEBUG)
-	vbpt_cur_t oldcur = *cur;
-	enum vbpt_type oldtype = hdr->type;
-	#endif
+
 	if (hdr->type == VBPT_LEAF) {
-		ret = vbpt_cur_next_leaf(cur);
-		goto end;
-	} else if (path->height == 0 && vbpt_cur_null(cur)) {
+		return vbpt_cur_next_leaf(cur);
+	}
+
+	CUR_NEXT_CHECK_BEGIN(cur);
+	if (path->height == 0 && vbpt_cur_null(cur)) {
 		assert(hdr->type == VBPT_NODE);
 		assert(cur->null_maxkey == VBPT_KEY_MAX);
 		cur->range.key += cur->range.len;
 		cur->range.len = VBPT_KEY_MAX - cur->range.key;
-		goto end;
+		CUR_NEXT_CHECK_END(cur);
+		return 0;
 	}
 
 	while (true) {
 		vbpt_node_t *n = path->nodes[path->height -1];
 		uint16_t nslot = path->slots[path->height -1];
-		assert(nslot < n->items_nr);
-		vbpt_cur_maybe_delete(cur);
 		if (nslot + 1 < n->items_nr) {
-			path->slots[path->height -1] = nslot + 1;
+			assert(nslot < n->items_nr);
+			uint64_t next_key   = n->kvp[nslot+1].key;
 			uint64_t old_high_k = n->kvp[nslot].key;
+			int del             = vbpt_cur_maybe_delete(cur);
+			uint16_t next_slot  = nslot + 1 - del;
+			assert(n->kvp[next_slot].key == next_key);
+			path->slots[path->height -1] = next_slot;
 			cur->range.key = old_high_k + 1;
-			cur->range.len = n->kvp[nslot+1].key - cur->range.key + 1;
+			cur->range.len = next_key - cur->range.key + 1;
 			break;
 		}
 
+		assert(!cur->flags.deleteme);
 		if (--path->height == 0) {
 			cur->range.key += cur->range.len;
 			cur->range.len = VBPT_KEY_MAX - cur->range.key;
@@ -339,18 +405,8 @@ vbpt_cur_next(vbpt_cur_t *cur)
 		}
 	}
 
-end:
-	//dmsg("OUT "); vbpt_cur_print(cur);
-	#if !defined(NDEBUG)
-	if (cur->range.key != oldcur.range.key + oldcur.range.len) {
-		fprintf(stderr,
-		        "cur->range.key=%lu new_range_start=%lu [oldtype=%d]\n",
-		        cur->range.key, oldcur.range.key + oldcur.range.len,
-		        oldtype);
-		assert(false);
-	}
-	#endif
-	return ret;
+	CUR_NEXT_CHECK_END(cur);
+	return 0;
 }
 
 /**
@@ -458,6 +514,12 @@ vbpt_cur_mark_delete(vbpt_cur_t *c)
 		return false;
 	}
 
+	// this is another case we don't handle
+	if (pnode->items_nr == path->slots[path->height-1]) {
+		printf("mark_delete failed\n");
+		return false;
+	}
+
 	c->flags.deleteme = 1;
 	return true;
 }
@@ -465,13 +527,16 @@ vbpt_cur_mark_delete(vbpt_cur_t *c)
 /**
  *  if a node is marked for deletion, delete it
  */
-static inline void
+static inline int
 vbpt_cur_maybe_delete(vbpt_cur_t *cur)
 {
 	if (cur->flags.deleteme) {
 		vbpt_delete_ptr(cur->tree, &cur->path, NULL);
 		cur->flags.deleteme = 0;
+		return 1;
 	}
+
+	return 0;
 }
 
 static uint16_t
@@ -615,7 +680,13 @@ vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 	//tmsg("REPLACE %s WITH %s\n", vbpt_cur_str(pc), vbpt_cur_str((vbpt_cur_t *)gc));
 	bool ret;
 	if (vbpt_cur_null(gc)) {
+		#if 1
 		ret = (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc));
+		#else
+		// XXX: delete does not work correctly, we probably need to make
+		// sure that the cursor remains consistent, after the deletion.
+		ret = false;
+		#endif
 	} else {
 		tsc_t t2; tsc_init(&t2); tsc_start(&t2);
 		ret = vbpt_cur_do_replace(pc, gc, jv, p_dist);

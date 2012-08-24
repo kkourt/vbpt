@@ -1147,7 +1147,7 @@ search_split_node(vbpt_tree_t *tree, vbpt_path_t *path, uint64_t key)
 
 // check if we can decrease the height of the tree,
 // return 1 if we decreased height
-static inline int
+static int
 try_decrease_height(vbpt_tree_t *tree, vbpt_path_t *path)
 {
 	if (path->height > 1)     // if we are at the root, bail out
@@ -1176,7 +1176,7 @@ try_decrease_height(vbpt_tree_t *tree, vbpt_path_t *path)
 	return 1;
 }
 
-static inline bool
+static bool
 cow_needed(vbpt_tree_t *tree, ver_t *ver, int op)
 {
 	ver_t *tver = tree->ver;

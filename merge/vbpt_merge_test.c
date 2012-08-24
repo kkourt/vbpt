@@ -316,7 +316,7 @@ merge_test_thr(void *arg_)
 			vbpt_logtree_finalize(txt->tree);
 
 			arg->stats.commit_attempts++;
-			vbpt_txt_res_t ret = vbpt_txt_try_commit(txt, mtree, 1);
+			vbpt_txt_res_t ret = vbpt_txt_try_commit(txt, mtree, 2);
 			//tmsg("RET:%s\n", vbpt_txt_res2str[ret]);
 			if (ret == VBPT_COMMIT_FAILED) {
 				seed = old_seed;
@@ -359,6 +359,8 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 	if (pthread_barrier_init(&barrier, NULL, nthreads+1) != 0)
 		assert(false && "failed to initialize barrier");
 
+	const uint64_t loops = 1024;
+	uint64_t total_ops = 0;
 	spinlock_init(&lock);
 	for (unsigned i=0; i<nthreads; i++) {
 		struct merge_thr_arg *arg = args + i;
@@ -366,10 +368,11 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 		arg->wl      = wls + i;
 		arg->barrier = &barrier;
 		arg->lock    = &lock;
-		arg->loops   = 1024*16;
+		arg->loops   = loops;
 		arg->id      = i;
 		arg->cpu     = cpus[i];
 		pthread_create(tids+i, NULL, merge_test_thr, arg);
+		total_ops += arg->wl->nr;
 	}
 
 	pthread_barrier_wait(&barrier);
@@ -382,10 +385,11 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 	}
 
 	vbpt_mtree_dealloc(mtree, NULL);
-	printf("total_ticks: %.1lfk\n", (double)thr_ticks/1000.0);
+	printf("total_ticks: %.1lfk ticks/op:%lu\n",
+	        (double)thr_ticks/1000.0, thr_ticks/(loops*total_ops));
 	for (unsigned i=0; i<nthreads; i++) {
-		printf("stats from thread: %u\n", i);
-		merge_thr_print_stats(args+i);
+		//printf("stats from thread: %u\n", i);
+		//merge_thr_print_stats(args+i);
 	}
 }
 
@@ -395,11 +399,11 @@ do_test_mt_rand(struct dist_desc *d0,
                 struct dist_desc *ds)
 {
 
-	printf("I> start:%6lu len:%6lu nr:%6lu seed:%u\n",
+	printf(" I> start:%6lu len:%6lu nr:%6lu seed:%u\n",
 	       d0->r_start, d0->r_len, d0->nr, d0->seed);
 	for (unsigned i=0; i<nthreads; i++) {
 		struct dist_desc *d = ds + i;
-		printf("%d> start:%6lu len:%6lu nr:%6lu seed:%u\n",
+		printf("%2d> start:%6lu len:%6lu nr:%6lu seed:%u\n",
 		       i, d->r_start, d->r_len, d->nr, d->seed);
 	}
 
@@ -477,13 +481,15 @@ int main(int argc, const char *argv[])
 	//do_test_mt_rand(&d0, 1, ds);
 	//do_test_mt_rand(&d0, 2, ds);
 	#endif
+
 	unsigned int ncpus, *cpus;
 	mt_get_options(&ncpus, &cpus);
+	#if 0
 	printf("Using %u cpus: ", ncpus);
 	for (unsigned int i=0; i<ncpus; i++)
 		printf("%d ", cpus[i]);
 	printf("\n");
-
+	#endif
 	test_mt_rand(ncpus, cpus);
 
 	return 0;
