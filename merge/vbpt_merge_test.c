@@ -268,8 +268,8 @@ merge_thr_print_stats(struct merge_thr_arg *arg)
 	printf("\tmerges:          %lu\n", s->merges);
 	printf("\tfailures:        %lu\n", s->failures);
 	printf("\tmerge failures:  %lu\n", s->merge_failures);
-	//printf("  Merge Stats:\n");
-	//vbpt_merge_stats_do_report("\t", &s->merge_stats);
+	printf("  Merge Stats:\n");
+	vbpt_merge_stats_do_report("\t", &s->merge_stats);
 }
 
 static void
