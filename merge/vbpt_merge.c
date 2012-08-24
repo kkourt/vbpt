@@ -303,12 +303,14 @@ vbpt_cur_next(vbpt_cur_t *cur)
 	int ret = 0;
 	//dmsg("IN  "); vbpt_cur_print(cur);
 	#if !defined(NDEBUG)
-	uint64_t new_range_start = cur->range.key + cur->range.len;
+	vbpt_cur_t oldcur = *cur;
+	enum vbpt_type oldtype = hdr->type;
 	#endif
 	if (hdr->type == VBPT_LEAF) {
 		ret = vbpt_cur_next_leaf(cur);
 		goto end;
 	} else if (path->height == 0 && vbpt_cur_null(cur)) {
+		assert(hdr->type == VBPT_NODE);
 		assert(cur->null_maxkey == VBPT_KEY_MAX);
 		cur->range.key += cur->range.len;
 		cur->range.len = VBPT_KEY_MAX - cur->range.key;
@@ -340,9 +342,11 @@ vbpt_cur_next(vbpt_cur_t *cur)
 end:
 	//dmsg("OUT "); vbpt_cur_print(cur);
 	#if !defined(NDEBUG)
-	if (cur->range.key != new_range_start) {
-		fprintf(stderr, "cur->range.key=%lu new_range_start=%lu\n",
-		        cur->range.key, new_range_start);
+	if (cur->range.key != oldcur.range.key + oldcur.range.len) {
+		fprintf(stderr,
+		        "cur->range.key=%lu new_range_start=%lu [oldtype=%d]\n",
+		        cur->range.key, oldcur.range.key + oldcur.range.len,
+		        oldtype);
 		assert(false);
 	}
 	#endif
