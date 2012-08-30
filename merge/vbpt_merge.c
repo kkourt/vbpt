@@ -241,8 +241,8 @@ vbpt_cur_next_verify(vbpt_cur_t *ocur, vbpt_cur_t *cur)
 }
 
 #if !defined(NDEBUG)
-# define CUR_NEXT_CHECK_BEGIN(cur) vbpt_cur_t ocur__ =  *cur
-# define CUR_NEXT_CHECK_END(cur)   vbpt_cur_next_verify(&ocur__, cur)
+# define CUR_NEXT_CHECK_BEGIN(cur) volatile vbpt_cur_t ocur__ =  *cur
+# define CUR_NEXT_CHECK_END(cur)   vbpt_cur_next_verify((vbpt_cur_t *)&ocur__, cur)
 #else
 # define CUR_NEXT_CHECK_BEGIN(cur)
 # define CUR_NEXT_CHECK_END(cur)
@@ -501,11 +501,18 @@ vbpt_cur_cmp(vbpt_cur_t *c1, vbpt_cur_t *c2, bool check_leafs)
  *  afterwards, as long as we are sure that we will be able to delete it)
  */
 bool
-vbpt_cur_mark_delete(vbpt_cur_t *c)
+vbpt_cur_mark_delete(vbpt_cur_t *c, ver_t *jv, uint16_t p_dist)
 {
 	assert(!vbpt_cur_null(c));
 	vbpt_path_t *path = &c->path;
 	vbpt_node_t *pnode = path->nodes[path->height -1];
+
+	// Is COW needed?
+	ver_t *pver = pnode->n_hdr.ver;
+	if (!ver_ancestor_strict_limit(jv, pver, p_dist)) {
+		return -1;
+	}
+	assert(refcnt_get(&pnode->n_hdr.h_refcnt) == 1);
 
 	// if this is the last element, re-balancing is required.
 	// Avoid this complex case (at least for now)
@@ -515,7 +522,8 @@ vbpt_cur_mark_delete(vbpt_cur_t *c)
 	}
 
 	// this is another case we don't handle
-	if (pnode->items_nr == path->slots[path->height-1]) {
+	assert(pnode->items_nr > 0);
+	if (pnode->items_nr -1 == path->slots[path->height-1]) {
 		printf("mark_delete failed\n");
 		return false;
 	}
@@ -681,7 +689,7 @@ vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 	bool ret;
 	if (vbpt_cur_null(gc)) {
 		#if 1
-		ret = (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc));
+		ret = (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc, jv, p_dist));
 		#else
 		// XXX: delete does not work correctly, we probably need to make
 		// sure that the cursor remains consistent, after the deletion.
