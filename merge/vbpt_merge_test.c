@@ -95,6 +95,8 @@ vbpt_merge_test(vbpt_tree_t *t,
 
 	bool success = false;
 	int err = 0;
+
+	const char *xerr;
 	switch (log_ret + (mer_ret<<1)) {
 		case 0:
 		//printf("Both merges failed\n");
@@ -105,14 +107,14 @@ vbpt_merge_test(vbpt_tree_t *t,
 		break;
 
 		case 2:
-		//printf("ERROR: merge succeeded, but log_merge failed\n");
+		xerr = "merge succeeded, but log_merge failed";
 		err = 1;
 		break;
 
 		case 3:
 		//printf("Both merges succeeded\n");
 		if (!vbpt_cmp(logt2_a, logt2_b)) {
-			printf("======> Resulting trees are not the same\n");
+			xerr = "resulting trees are not the same\n";
 			err = 1;
 		}
 		success = true;
@@ -132,8 +134,10 @@ vbpt_merge_test(vbpt_tree_t *t,
 		printf("BPT MERGE: "); vbpt_tree_print(logt2_b, true);
 	}
 
-	if (err)
+	if (err) {
+		printf("FAIL: %s", xerr);
 		assert(false);
+	}
 
 	#define print_ticks(x, base)\
 		printf("%-13s %5lu (%0.3lf)\n", \
@@ -244,6 +248,7 @@ struct merge_thr_stats {
 	unsigned long      successes;
 	unsigned long      commit_attempts;
 	vbpt_merge_stats_t merge_stats;
+	unsigned long      tid;
 };
 
 struct merge_thr_arg {
@@ -262,14 +267,14 @@ static void
 merge_thr_print_stats(struct merge_thr_arg *arg)
 {
 	struct merge_thr_stats *s = &arg->stats;
-	printf("\tticks   :        %.1lfk\n", (double)arg->ticks/1000.0);
-	printf("\tcommit attempts: %lu\n", s->commit_attempts);
-	printf("\tsuccesses:       %lu\n", s->successes);
-	printf("\tmerges:          %lu\n", s->merges);
-	printf("\tfailures:        %lu\n", s->failures);
-	printf("\tmerge failures:  %lu\n", s->merge_failures);
-	printf("  Merge Stats:\n");
-	vbpt_merge_stats_do_report("\t", &s->merge_stats);
+	printf("  ticks: %7.1lfm", (double)arg->ticks/(1000.0*1000.0));
+	printf("  commit attempts: %5lu", s->commit_attempts);
+	printf("  successes: %5lu", s->successes);
+	printf("  merges: %5lu", s->merges);
+	printf("  failures: %5lu", s->failures);
+	printf("  merge failures: %5lu\n", s->merge_failures);
+	//printf("  Merge Stats:\n");
+	//vbpt_merge_stats_do_report("\t", &s->merge_stats);
 }
 
 static void
@@ -303,6 +308,8 @@ merge_test_thr(void *arg_)
 	unsigned seed = arg->wl->seed;
 	arg->stats = (struct merge_thr_stats){0};
 	setaffinity_oncpu(arg->cpu);
+	arg->stats.tid = gettid();
+
 	pthread_barrier_wait(arg->barrier);
 	tsc_t tsc; tsc_init(&tsc); tsc_start(&tsc);
 	for (unsigned i=0; i<arg->loops; i++) {
@@ -385,11 +392,11 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 	}
 
 	vbpt_mtree_dealloc(mtree, NULL);
-	printf("total_ticks: %.1lfk ticks/op:%lu\n",
-	        (double)thr_ticks/1000.0, thr_ticks/(loops*total_ops));
+	printf("total_ticks: %.1lfk ticks/op:%lu loops:%lu\n",
+	        (double)thr_ticks/1000.0, thr_ticks/(loops*total_ops), loops);
 	for (unsigned i=0; i<nthreads; i++) {
-		//printf("stats from thread: %u\n", i);
-		//merge_thr_print_stats(args+i);
+		printf("T: %2u [tid:%lu] ", i, args[i].stats.tid);
+		merge_thr_print_stats(args+i);
 	}
 }
 
@@ -418,6 +425,15 @@ do_test_mt_rand(struct dist_desc *d0,
 static void __attribute__((unused))
 test_mt_rand(unsigned nr_threads, unsigned *cpus)
 {
+	/**
+	 * create disjoint sets for each thread:
+	 *   d0:      initial data
+	 *   d:       thread-specific data
+	 *   d0_len:  key range (max key)
+	 *   d0_nr:   number of initial keys
+	 *   d_nr:    number of keys for each thread
+	 *   d_len:   key range for each thread
+	 */
 	const unsigned long d0_len = 32768;
 	const unsigned long d0_nr  = (d0_len>>3); // /128
 	const unsigned long d_nr   = 16;
@@ -438,37 +454,42 @@ test_mt_rand(unsigned nr_threads, unsigned *cpus)
 	do_test_mt_rand(&d0, nr_threads, cpus, dt);
 }
 
-
-
-int main(int argc, const char *argv[])
+static void __attribute__((used))
+do_serial_test(void)
 {
-	//test1();
-	//test2();
-
-	#if 0
 	struct dist_desc d0 = { .r_start =   0,    .r_len =16384, .nr = 1024, .seed = 0};
 	struct dist_desc d1 = { .r_start =   0,    .r_len =  128, .nr =   16, .seed = 0};
 	struct dist_desc d2 = { .r_start =   4096, .r_len =  128, .nr =   16, .seed = 0};
+	unsigned count=0, successes=0;
+
+	void my_test(unsigned i, unsigned k, unsigned j) {
+		d0.seed = i;
+		d1.seed = j;
+		d2.seed = k;
+		printf("Testing %u %u %u\n", i, j, k);
+		successes += test_merge_rand(&d0, &d1, &d2);
+		count++;
+	}
+	my_test(1, 0, 0);
 
 	// XXX: This test works well for VBPT_NODE_SIZE=128
 	// VBPT_NODE_SIZE=128: ------> Count: 16384 Successes: 14513
 	// VBPT_NODE_SIZE=512: ------> Count: 16384 Successes: 2489
 	// need to investigate more
 	const int xsize = 128;
-	unsigned count=0, successes=0;
 	for (unsigned i=0; i<xsize; i++)
 		for (unsigned j=0; j<xsize; j++)
-			for (unsigned k=0; j<xsize; j++) {
-				d0.seed = i;
-				d1.seed = j;
-				d2.seed = k;
-				//printf("Testing %u %u %u\n", i, j, k);
-				successes += test_merge_rand(&d0, &d1, &d2);
-				count++;
-			}
+			for (unsigned k=0; j<xsize; j++)
+				my_test(i, j, k);
 	printf("------> Count: %u Successes: %u\n", count, successes);
-	#endif
+}
 
+int main(int argc, const char *argv[])
+{
+	//test1();
+	//test2();
+
+	//do_serial_test();
 	#if 0
 	struct dist_desc d0 = { .r_start= 0, .r_len =16384, .nr = 4096, .seed = 1};
 	struct dist_desc ds[] = {

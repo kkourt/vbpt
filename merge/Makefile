@@ -3,7 +3,8 @@
 include scripts/utils.mk
 
 CC      = gcc
-CFLAGS  = -Wall -O2 -g -D_GNU_SOURCE -I. -std=c99 #-fprofile-arcs -ftest-coverage
+CFLAGS  = -Wall -O2 -g -D_GNU_SOURCE -I. -std=c99 #-DNDEBUG #-fprofile-arcs -ftest-coverage
+#CFLAGS += -Wconversion
 #CFLAGS += $(EXTRA_WARNINGS)
 LIBS=-lpthread
 hdrs=$(wildcard *.h)

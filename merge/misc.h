@@ -87,11 +87,11 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
-static inline pid_t gettid(void)
+static inline long gettid(void)
 {
 	return syscall(SYS_gettid);
 }
 
-#define tmsg(fmt, args...) do { printf("%4d> " fmt, gettid(), ##args); } while (0)
+#define tmsg(fmt, args...) do { printf("%4ld> " fmt, gettid(), ##args); } while (0)
 
 #endif /* MISC_H__ */

@@ -107,7 +107,6 @@ vbpt_node_verify(vbpt_node_t *node)
 	}
 }
 
-
 void
 vbpt_node_print(vbpt_node_t *node, int indent, bool verify, int max_limit)
 {

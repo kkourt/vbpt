@@ -51,7 +51,7 @@ vbpt_cur_str(vbpt_cur_t *cur)
 	static char buff_arr[CURSTR_BUFFS_NR][CURSTR_BUFF_SIZE];
 	char *buff = buff_arr[i++ % CURSTR_BUFFS_NR];
 	snprintf(buff, CURSTR_BUFF_SIZE,
-	       "C: range:[%4lu+%4lu] null:%u null_max_key:%4lu v:%s",
+	       "cur: range:[%4lu+%4lu] null:%u null_max_key:%6lu v:%s",
 	       cur->range.key, cur->range.len,
 	       cur->flags.null, cur->null_maxkey,
 	       ver_str(vbpt_cur_ver((vbpt_cur_t *)cur)));
@@ -465,13 +465,19 @@ vbpt_cur_cmp(vbpt_cur_t *c1, vbpt_cur_t *c2, bool check_leafs)
 		while (!vbpt_cur_null(c2) && c2->range.len != 1)
 			vbpt_cur_down(c2);
 
-		if (!vbpt_range_eq(&c1->range, &c2->range))
+		if (!vbpt_range_eq(&c1->range, &c2->range)) {
+			//printf("got different ranges:\n");
+			//vbpt_cur_print(c1);
+			//vbpt_cur_print(c2);
 			return false;
+		}
 
 		if (c1->range.len == 1) {
 			assert(c2->range.len == 1);
-			if (check_leafs && vbpt_cur_hdr(c1) != vbpt_cur_hdr(c2))
+			if (check_leafs && vbpt_cur_hdr(c1) != vbpt_cur_hdr(c2)) {
+				//printf("leafs are not the same\n");
 				return false;
+			}
 		} else {
 			assert(vbpt_cur_null(c1));
 			assert(vbpt_cur_null(c2));
@@ -554,6 +560,18 @@ vbpt_cur_height(const vbpt_cur_t *cur)
 	return cur->tree->height - cur->path.height;
 }
 
+/*
+ * get key for current node
+ */
+static uint64_t __attribute__((unused))
+vbpt_cur_nodekey(const vbpt_cur_t *cur)
+{
+	assert(cur->path.height > 0); // not sure what we should return here
+	uint16_t pidx  = cur->path.height - 1;
+	uint16_t pslot = cur->path.slots[pidx];
+	return           cur->path.nodes[pidx]->kvp[pslot].key;
+}
+
 /**
  * try to replace node pointed by @pc with node pointed by @gc, knowing that @gc
  * does not point to null
@@ -579,33 +597,21 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 	assert(!vbpt_cur_null(gc));
 	uint16_t p_height = vbpt_cur_height(pc);
 	uint16_t g_height = vbpt_cur_height(gc);
-	assert(vbpt_cur_hdr(pc) != vbpt_cur_hdr((vbpt_cur_t *)gc));
+	vbpt_hdr_t *g_hdr = vbpt_cur_hdr((vbpt_cur_t *)gc);
+	assert(vbpt_cur_hdr(pc) != g_hdr);
 
 	if (g_height > p_height) {
 		//printf("g_height > p_height: bailing out\n");
 		return false; // TODO
 	}
 
+	// find the key for the new node
 	uint64_t p_key = pc->range.key + pc->range.len - 1;
-
-	#if !defined(NDEBUG)
-	assert(gc->path.height > 0);
-	vbpt_node_t *p_gnode = gc->path.nodes[gc->path.height - 1];
-	uint16_t p_gslot = gc->path.slots[gc->path.height - 1];
-	uint64_t g_key = p_gnode->kvp[p_gslot].key;
-	if (g_key != p_key) {
-		vbpt_tree_print(gc->tree, false);
-		vbpt_tree_print(pc->tree, false);
-		vbpt_cur_print(gc);
-		vbpt_cur_print(pc);
-		dmsg("g_key=%lu p_key=%lu\n", g_key, p_key);
-		assert(g_key == p_key);
-	}
-	#endif
+	assert(vbpt_cur_nodekey(gc) == p_key);
+	assert(vbpt_cur_null(pc) || vbpt_cur_nodekey(pc) == p_key);
 
 	vbpt_node_t *p_pnode;
 	uint16_t     p_pslot;
-	vbpt_hdr_t  *p_hdr = NULL;
 	if (pc->path.height == 0) {
 		// we are at the end, we need to add a new item to the root node
 		p_pnode = pc->tree->root;
@@ -616,34 +622,32 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 		p_pslot = pc->path.slots[pc->path.height - 1];
 	}
 
-	// check if COW is needed
+	// we are going to modify p_pnode, check if COW is needed
 	ver_t *p_pver = p_pnode->n_hdr.ver;
 	if (!ver_ancestor_strict_limit(jv, p_pver, p_dist)) {
-		return -1;
+		return false;
 	}
 	assert(refcnt_get(&p_pnode->n_hdr.h_refcnt) == 1);
 
+	vbpt_hdr_t *p_hdr = NULL; // this is the item we are going to replace
 	if (vbpt_cur_null(pc)) {
 		assert(p_pnode->items_nr <= p_pnode->items_total);
-
 		if (p_pnode->items_nr == p_pnode->items_total) {
 			//printf("pc points to NULL, and no room in node\n");
 			return false;
 		}
-
 		// slot should be OK
-	} else {
-		if (pc->path.height != 0)
-			p_hdr = vbpt_cur_hdr(pc);
+	} else if (pc->path.height != 0) {
+		p_hdr = vbpt_cur_hdr(pc);
 	}
 
-	// in this case, the rightmost value changes, so we need to update the
-	// parent chain, which we don't currently do.
-	if (p_pslot == p_pnode->items_nr && pc->path.height != 0) {
+	// in the following cases, the rightmost value will change, and we would
+	// need to update the parent chain. For now we just bail out
+	if ( p_hdr && p_pslot == p_pnode->items_nr -1 && pc->path.height != 0)
 		return false;
-	}
+	if (!p_hdr && p_pslot == p_pnode->items_nr    && pc->path.height != 0)
+		return false;
 
-	vbpt_hdr_t  *g_hdr = vbpt_cur_hdr((vbpt_cur_t *)gc);
 	assert(g_hdr != p_hdr);
 	vbpt_hdr_t *new_hdr = vbpt_hdr_getref(g_hdr);
 	if (p_height > g_height) { // add a sufficiently large chain of nodes
@@ -688,13 +692,7 @@ vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 	//tmsg("REPLACE %s WITH %s\n", vbpt_cur_str(pc), vbpt_cur_str((vbpt_cur_t *)gc));
 	bool ret;
 	if (vbpt_cur_null(gc)) {
-		#if 1
 		ret = (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc, jv, p_dist));
-		#else
-		// XXX: delete does not work correctly, we probably need to make
-		// sure that the cursor remains consistent, after the deletion.
-		ret = false;
-		#endif
 	} else {
 		tsc_t t2; tsc_init(&t2); tsc_start(&t2);
 		ret = vbpt_cur_do_replace(pc, gc, jv, p_dist);
@@ -1019,7 +1017,6 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	dmsg("Global  "); vbpt_tree_print_limit((vbpt_tree_t *)gt, true, 1);
 	dmsg("Private "); vbpt_tree_print_limit(pt, true, 1);
 	#endif
-
 	#define TSC2_START() { tsc_init(&tsc2_); tsc_start(&tsc2_); }
 	#define TSC2_END()   ({tsc_pause(&tsc2_); tsc_getticks(&tsc2_);})
 
