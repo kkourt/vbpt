@@ -8,7 +8,7 @@ CFLAGS  = -Wall -O2 -g -D_GNU_SOURCE -I. -std=c99 #-DNDEBUG #-fprofile-arcs -fte
 #CFLAGS += $(EXTRA_WARNINGS)
 LIBS=-lpthread
 hdrs=$(wildcard *.h)
-vbpt_objs  = vbpt_merge.o vbpt_log.o vbpt.o ver.o phash.o mt_lib.o
+vbpt_objs  = vbpt_merge.o vbpt_log.o vbpt.o ver.o phash.o mt_lib.o vbpt_mm.o
 vbpt_tests = vbpt-test vbpt_merge_test ver_test vbpt_file_test
 fbenches   = fbench-nofiles fbench-sepfiles fbench-samefile fbench-vbpt
 
@@ -21,7 +21,7 @@ all:  $(vbpt_tests) $(fbenches)
 vbpt-test.o: vbpt.c $(hdrs)
 	$(CC) $(CFLAGS) -DVBPT_TEST $< -c -o $@
 
-vbpt-test: vbpt-test.o ver.o vbpt_log.o phash.o
+vbpt-test: vbpt-test.o ver.o vbpt_log.o phash.o vbpt_mm.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
 
 vbpt_file.o: vbpt_file.c $(hdrs)

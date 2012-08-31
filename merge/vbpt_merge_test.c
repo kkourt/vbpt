@@ -3,6 +3,7 @@
 
 #include "ver.h"
 #include "vbpt.h"
+#include "vbpt_mm.h"
 #include "vbpt_log.h"
 #include "vbpt_merge.h"
 #include "vbpt_mtree.h"
@@ -248,6 +249,7 @@ struct merge_thr_stats {
 	unsigned long      successes;
 	unsigned long      commit_attempts;
 	vbpt_merge_stats_t merge_stats;
+	vbpt_mm_stats_t    mm_stats;
 	unsigned long      tid;
 	uint64_t           txtree_alloc_ticks;
 	uint64_t           insert_ticks;
@@ -294,6 +296,7 @@ merge_thr_print_stats(struct merge_thr_arg *arg)
 	printf("\tmerge ticks: %lu [merge/total:%lf]\n",
 	          merge_ticks, (double)merge_ticks/(double)arg->ticks);
 	vbpt_merge_stats_do_report("\t", &s->merge_stats);
+	printf("\tmm_allocations: %lu\n", s->mm_stats.nodes_allocated);
 }
 
 static void
@@ -326,6 +329,7 @@ merge_test_thr(void *arg_)
 	vbpt_mtree_t *mtree = arg->mtree;
 	unsigned seed = arg->wl->seed;
 	arg->stats = (struct merge_thr_stats){0};
+	vbpt_mm_init();
 	setaffinity_oncpu(arg->cpu);
 	arg->stats.tid = gettid();
 
@@ -377,6 +381,7 @@ merge_test_thr(void *arg_)
 	arg->ticks = tsc_getticks(&tsc);
 	pthread_barrier_wait(arg->barrier);
 	vbpt_merge_stats_get(&arg->stats.merge_stats);
+	vbpt_mm_stats_get(&arg->stats.mm_stats);
 	return NULL;
 }
 

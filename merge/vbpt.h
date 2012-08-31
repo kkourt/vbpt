@@ -45,25 +45,30 @@ typedef struct vbpt_kvp vbpt_kvp_t;
  *  <=a   <=b   <=c   <=d
  */
 struct vbpt_node {
-	vbpt_hdr_t  n_hdr;
-	uint16_t    items_nr, items_total;
-	vbpt_kvp_t  kvp[];
+	vbpt_hdr_t         n_hdr;
+	uint16_t           items_nr, items_total;
+	struct vbpt_node   *mm_next; // for mem queues
+	vbpt_kvp_t         kvp[];
 };
 typedef struct vbpt_node vbpt_node_t;
 
+#if 0
 /* inline leaf: UNUSED
  *  This should be used for packing multiple small objects in a small leaf.
  */
 struct vbpt_leafi {
 	struct vbpt_hdr li_hdr;
 	size_t len, total_len;
+	struct vbpt_leafi  *mm_next; // for mem queues
 	char data[];
 };
 typedef struct vbpt_leafi vbpt_leafi_t;
+#endif
 
 struct vbpt_leaf {
 	struct vbpt_hdr l_hdr;
 	size_t d_len, d_total_len;
+	struct vbpt_leaf   *mm_next; // for mem queues
 	char *data;
 };
 typedef struct vbpt_leaf vbpt_leaf_t;

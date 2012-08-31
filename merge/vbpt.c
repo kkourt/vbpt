@@ -22,6 +22,7 @@
 #include "ver.h"
 #include "refcnt.h"
 #include "vbpt.h"
+#include "vbpt_mm.h"
 
 #define MIN(x,y) ((x) < (y) ? (x) : (y))
 
@@ -231,77 +232,6 @@ find_key(vbpt_node_t *node, uint64_t key)
 {
 	vbpt_kvp_t *kvp = find_kvp(node, key);
 	return kvp->val;
-}
-
-/*
- * initialize a header
- *  Version's refcount will be increased
- */
-static void
-vbpt_hdr_init(vbpt_hdr_t *hdr, ver_t *ver, enum vbpt_type type)
-{
-	hdr->ver = ver_getref(ver);
-	refcnt_init(&hdr->h_refcnt, 1);
-	hdr->type = type;
-}
-
-/*
- * allocate a new node
- *  Version's refcount will be increased
- */
-vbpt_node_t *
-vbpt_node_alloc(size_t node_size, ver_t *ver)
-{
-	assert(node_size > sizeof(vbpt_node_t));
-	vbpt_node_t *ret = xmalloc(node_size);
-	vbpt_hdr_init(&ret->n_hdr, ver, VBPT_NODE);
-	ret->items_nr = 0;
-	ret->items_total = (node_size - sizeof(vbpt_node_t)) / sizeof(vbpt_kvp_t);
-	return ret;
-}
-
-/**
- * free a node
- *  version's refcount will be decreased
- *  children's refcount will be decrased
- */
-void
-vbpt_node_dealloc(vbpt_node_t *node)
-{
-	vbpt_kvp_t *kvp = node->kvp;
-	for (uint16_t i=0; i<node->items_nr; i++) {
-		vbpt_hdr_putref(kvp[i].val);
-	}
-	node->items_nr = 0;
-	ver_putref(node->n_hdr.ver);
-	free(node);
-}
-
-/**
- * allocate a new leaf
- *  version's refcount will be increased
- */
-vbpt_leaf_t *
-vbpt_leaf_alloc(size_t data_size, ver_t *ver)
-{
-	vbpt_leaf_t *ret = xmalloc(sizeof(*ret));
-	vbpt_hdr_init(&ret->l_hdr, ver, VBPT_LEAF);
-	ret->d_len = 0;
-	ret->d_total_len = data_size;
-	ret->data = xmalloc(data_size);
-	return ret;
-}
-
-/**
- * free a leaf
- *  version's refcount will be decreased
- */
-void
-vbpt_leaf_dealloc(vbpt_leaf_t *leaf)
-{
-	ver_putref(leaf->l_hdr.ver);
-	free(leaf->data);
-	free(leaf);
 }
 
 /**
