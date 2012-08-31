@@ -249,6 +249,10 @@ struct merge_thr_stats {
 	unsigned long      commit_attempts;
 	vbpt_merge_stats_t merge_stats;
 	unsigned long      tid;
+	uint64_t           txtree_alloc_ticks;
+	uint64_t           insert_ticks;
+	uint64_t           finalize_ticks;
+	uint64_t           commit_ticks;
 };
 
 struct merge_thr_arg {
@@ -266,6 +270,13 @@ struct merge_thr_arg {
 static void
 merge_thr_print_stats(struct merge_thr_arg *arg)
 {
+	#define pr_ticks(x__) do { \
+		double p__ = (double)s->x__ / (double)arg->ticks; \
+		if (p__ < 0.1) \
+			break; \
+		printf("\t" # x__ ": %lu (%.1lf%%)\n", s->x__, p__*100); \
+	} while (0)
+
 	struct merge_thr_stats *s = &arg->stats;
 	printf("  ticks: %7.1lfm", (double)arg->ticks/(1000.0*1000.0));
 	printf("  commit attempts: %5lu", s->commit_attempts);
@@ -273,6 +284,11 @@ merge_thr_print_stats(struct merge_thr_arg *arg)
 	printf("  merges: %5lu", s->merges);
 	printf("  failures: %5lu", s->failures);
 	printf("  merge failures: %5lu\n", s->merge_failures);
+	pr_ticks(merge_stats.merge_ticks);
+	pr_ticks(txtree_alloc_ticks);
+	pr_ticks(insert_ticks);
+	pr_ticks(finalize_ticks);
+	pr_ticks(commit_ticks);
 	printf("  Merge Stats:\n");
 	uint64_t merge_ticks = s->merge_stats.merge_ticks;
 	printf("\tmerge ticks: %lu [merge/total:%lf]\n",
@@ -320,13 +336,23 @@ merge_test_thr(void *arg_)
 		while (1) {
 			unsigned old_seed = seed;
 			// start a transaction
-			vbpt_txtree_t *txt = vbpt_txtree_alloc(mtree);
+			vbpt_txtree_t *txt;
+			TSC_ADD_TICKS(arg->stats.txtree_alloc_ticks, {
+				txt = vbpt_txtree_alloc(mtree);
+			})
 			//tmsg("forked %zd from %zd\n", txt->tree->ver->v_id, txt->bver->v_id);
-			vbpt_logtree_insert_rand(txt->tree, arg->wl, &seed);
-			vbpt_logtree_finalize(txt->tree);
+			TSC_ADD_TICKS(arg->stats.insert_ticks, {
+				vbpt_logtree_insert_rand(txt->tree, arg->wl, &seed);
+			})
+			TSC_ADD_TICKS(arg->stats.finalize_ticks, {
+				vbpt_logtree_finalize(txt->tree);
+			})
 
 			arg->stats.commit_attempts++;
-			vbpt_txt_res_t ret = vbpt_txt_try_commit(txt, mtree, 2);
+			vbpt_txt_res_t ret;
+			TSC_ADD_TICKS(arg->stats.commit_ticks, {
+				ret = vbpt_txt_try_commit(txt, mtree, 2);
+			})
 			//tmsg("RET:%s\n", vbpt_txt_res2str[ret]);
 			if (ret == VBPT_COMMIT_FAILED) {
 				seed = old_seed;
