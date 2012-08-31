@@ -273,8 +273,11 @@ merge_thr_print_stats(struct merge_thr_arg *arg)
 	printf("  merges: %5lu", s->merges);
 	printf("  failures: %5lu", s->failures);
 	printf("  merge failures: %5lu\n", s->merge_failures);
-	//printf("  Merge Stats:\n");
-	//vbpt_merge_stats_do_report("\t", &s->merge_stats);
+	printf("  Merge Stats:\n");
+	uint64_t merge_ticks = s->merge_stats.merge_ticks;
+	printf("\tmerge ticks: %lu [merge/total:%lf]\n",
+	          merge_ticks, (double)merge_ticks/(double)arg->ticks);
+	vbpt_merge_stats_do_report("\t", &s->merge_stats);
 }
 
 static void

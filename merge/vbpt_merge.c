@@ -758,7 +758,7 @@ void vbpt_merge_stats_do_report(char *prefix, vbpt_merge_stats_t *st)
 		double p__ = (double)st->x__ / (double)st->merge_ticks; \
 		if (p__ < 0.1) \
 			break; \
-		printf("%s" # x__ ": %lu (%.2lf%%)\n", prefix, st->x__, p__); \
+		printf("%s" # x__ ": %lu (%.1lf%%)\n", prefix, st->x__, p__*100); \
 	} while (0)
 
 	#define pr_ticks2(ticks__, cnt__) do { \
