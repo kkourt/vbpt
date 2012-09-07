@@ -52,7 +52,8 @@ vbpt_leaf_print(vbpt_leaf_t *leaf, int indent)
 {
 	printf("%*s" "[leaf=%p ->len=%lu ->total_len=%lu] %s\n",
 	        indent, " ",
-		leaf, leaf->len, leaf->total_len, vbpt_hdr_str(&leaf->l_hdr));
+	        leaf, leaf->d_len, leaf->d_total_len,
+	        vbpt_hdr_str(&leaf->l_hdr));
 }
 
 static void
@@ -276,26 +277,28 @@ vbpt_node_dealloc(vbpt_node_t *node)
 
 /**
  * allocate a new leaf
- *  Version's refcount will be increased
+ *  version's refcount will be increased
  */
 vbpt_leaf_t *
-vbpt_leaf_alloc(size_t leaf_size, ver_t *ver)
+vbpt_leaf_alloc(size_t data_size, ver_t *ver)
 {
-	assert(leaf_size > sizeof(vbpt_leaf_t));
-	vbpt_leaf_t *ret = xmalloc(leaf_size);
+	vbpt_leaf_t *ret = xmalloc(sizeof(*ret));
 	vbpt_hdr_init(&ret->l_hdr, ver, VBPT_LEAF);
-	ret->len = 0;
-	ret->total_len = (leaf_size - sizeof(vbpt_leaf_t));
+	ret->d_len = 0;
+	ret->d_total_len = data_size;
+	ret->data = xmalloc(data_size);
 	return ret;
 }
+
 /**
  * free a leaf
- *  vresion's refcount will be decreased
+ *  version's refcount will be decreased
  */
 void
 vbpt_leaf_dealloc(vbpt_leaf_t *leaf)
 {
 	ver_putref(leaf->l_hdr.ver);
+	free(leaf->data);
 	free(leaf);
 }
 

@@ -2,3 +2,5 @@
 .*swp
 vbpt-test
 vbpt_merge_test
+perf.data*
+ver_test

@@ -51,10 +51,20 @@ struct vbpt_node {
 };
 typedef struct vbpt_node vbpt_node_t;
 
-struct vbpt_leaf {
-	struct vbpt_hdr l_hdr;
+/* inline leaf: UNUSED
+ *  This should be used for packing multiple small objects in a small leaf.
+ */
+struct vbpt_leafi {
+	struct vbpt_hdr li_hdr;
 	size_t len, total_len;
 	char data[];
+};
+typedef struct vbpt_leafi vbpt_leafi_t;
+
+struct vbpt_leaf {
+	struct vbpt_hdr l_hdr;
+	size_t d_len, d_total_len;
+	char *data;
 };
 typedef struct vbpt_leaf vbpt_leaf_t;
 
