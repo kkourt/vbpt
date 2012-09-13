@@ -1,0 +1,16 @@
+#!/usr/bin/perl -w
+
+use Socket;
+my $ifconfig = "/sbin/ifconfig |";
+open( IFCONFIG, $ifconfig) or die "$@ \n";
+
+$/="\n\n";
+while (<IFCONFIG>){
+        if (/(^\S+).*inet addr:(\d+\.\d+\.\d+\.\d+)/ms){;
+		$if=$1;
+		$ip=$2;
+		$name = scalar gethostbyaddr(inet_aton($ip), AF_INET);
+		$name = "" unless defined($name);
+                print "$if\t$ip\t$name\n";
+        }
+}

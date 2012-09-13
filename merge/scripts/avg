@@ -1,0 +1,1 @@
+ ./vbpt-merge-test | grep t_merge_vbpt | egrep -o -e '\(.+\)' | sed -e 's/(//;s/)//'  | avg.awk
