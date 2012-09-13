@@ -100,11 +100,13 @@ vbpt_logtree_dealloc(vbpt_tree_t *tree)
 static inline void
 vbpt_logtree_insert(vbpt_tree_t *t,  uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o)
 {
+	VBPT_START_TIMER(logtree_insert);
 	vbpt_log_t *log = vbpt_tree_log(t);
 	if (o)
 		vbpt_log_read(log, k);
 	vbpt_log_write(log, k, l);
 	vbpt_insert(t, k, l, o);
+	VBPT_STOP_TIMER(logtree_insert);
 }
 
 static inline void
@@ -115,6 +117,17 @@ vbpt_logtree_delete(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t **o)
 		vbpt_log_read(log, k);
 	vbpt_log_delete(log, k);
 	vbpt_delete(t, k, o);
+}
+
+static inline vbpt_leaf_t *
+vbpt_logtree_get(vbpt_tree_t  *t, uint64_t k)
+{
+	VBPT_START_TIMER(logtree_get);
+	vbpt_log_t *log = vbpt_tree_log(t);
+	vbpt_log_read(log, k);
+	vbpt_leaf_t *ret = vbpt_get(t, k);
+	VBPT_STOP_TIMER(logtree_get);
+	return ret;
 }
 
 

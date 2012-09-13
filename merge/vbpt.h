@@ -114,6 +114,10 @@ void vbpt_tree_destroy(vbpt_tree_t *dest);
 // operations
 void vbpt_insert(vbpt_tree_t *t, uint64_t k, vbpt_leaf_t *l, vbpt_leaf_t **o);
 void vbpt_delete(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t **data);
+vbpt_leaf_t *vbpt_get(vbpt_tree_t *tree, uint64_t key);
+// file operations
+void vbpt_file_pread (vbpt_tree_t *tree, off_t offset,       void *buff, size_t len);
+void vbpt_file_pwrite(vbpt_tree_t *tree, off_t offset, const void *buff, size_t len);
 
 /* low-level interface */
 
@@ -251,5 +255,43 @@ vpbt_path_key(vbpt_path_t *path, uint16_t lvl)
 	return n->kvp[slot].key;
 }
 
+
+/* debugging */
+#include "tsc.h"
+typedef struct vbpt_stats vbpt_stats_t;
+void vbpt_stats_report(uint64_t total_ticks);
+void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks);
+
+extern __thread vbpt_stats_t VbptStats;
+
+struct vbpt_stats {
+	tsc_t txt_try_commit;
+	tsc_t logtree_insert;
+	tsc_t logtree_get;
+	tsc_t txtree_alloc;
+	tsc_t file_pread;
+};
+
+#define DECLARE_VBPT_STATS() __thread vbpt_stats_t VbptStats
+#define INIT_VBPT_STATS()  do { \
+	bzero(&VbptStats, sizeof(VbptStats)); \
+	tsc_init(&VbptStats.txtree_alloc);    \
+} while (0)
+
+static inline void
+vbpt_stats_get(vbpt_stats_t *stats)
+{
+	*stats = VbptStats;
+}
+
+#define VBPT_START_TIMER(_x)  \
+	do {                              \
+		tsc_start(&VbptStats._x); \
+	} while (0)
+
+#define VBPT_STOP_TIMER(_x)  \
+	do {                               \
+		tsc_pause(&VbptStats._x);  \
+	} while (0)
 
 #endif /* VBPT_H_ */

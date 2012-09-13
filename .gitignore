@@ -2,5 +2,10 @@
 .*swp
 vbpt-test
 vbpt_merge_test
+vbpt_file_test
 perf.data*
 ver_test
+fbench-*
+core
+cscope.out
+gmon.out

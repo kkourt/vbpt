@@ -23,6 +23,7 @@ typedef struct vbpt_txtree vbpt_txtree_t;
 static inline vbpt_txtree_t *
 vbpt_txtree_alloc(vbpt_mtree_t *mtree)
 {
+	VBPT_START_TIMER(txtree_alloc);
 	vbpt_txtree_t *ret = xmalloc(sizeof(vbpt_txtree_t));
 
 	vbpt_tree_t *tree = vbpt_tree_alloc(NULL); // allocate a dummy tree
@@ -32,6 +33,7 @@ vbpt_txtree_alloc(vbpt_mtree_t *mtree)
 	ret->tree = tree;
 	ret->depth = 1;
 	ret->bver = tree->ver->parent;
+	VBPT_STOP_TIMER(txtree_alloc);
 	return ret;
 }
 
@@ -66,11 +68,12 @@ vbpt_txt_try_commit(vbpt_txtree_t *txt, vbpt_mtree_t *mt,
 	vbpt_tree_t *tx_tree = txt->tree;
 	ver_t *bver = txt->bver;
 
+	VBPT_START_TIMER(txt_try_commit);
 	for (unsigned i=0;;) {
 		vbpt_tree_t gtree;
 		if (vbpt_mtree_try_commit(mt, tx_tree, bver, &gtree)) {
 			vbpt_tree_destroy(&gtree);
-			goto success;
+			goto end;
 		}
 
 		ret = VBPT_COMMIT_MERGED;
@@ -90,8 +93,9 @@ vbpt_txt_try_commit(vbpt_txtree_t *txt, vbpt_mtree_t *mt,
 	}
 
 	vbpt_tree_dealloc(tx_tree);
-success:
+end:
 	free(txt);
+	VBPT_STOP_TIMER(txt_try_commit);
 	return ret;
 }
 

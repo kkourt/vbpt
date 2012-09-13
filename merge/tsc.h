@@ -10,6 +10,7 @@
 struct tsc {
 	uint64_t	ticks;
 	uint64_t	last;
+	uint64_t        cnt;
 };
 typedef struct tsc tsc_t;
 
@@ -56,6 +57,7 @@ static inline void tsc_init(tsc_t *tsc)
 {
 	tsc->ticks = 0;
 	tsc->last  = 0;
+	tsc->cnt   = 0;
 }
 
 static inline void tsc_shut(tsc_t *tsc)
@@ -65,11 +67,17 @@ static inline void tsc_shut(tsc_t *tsc)
 static inline void tsc_start(tsc_t *tsc)
 {
 	tsc->last = get_ticks();
+	assert(tsc->cnt % 2 == 0);
+	tsc->cnt++;
 }
 
 static inline void tsc_pause(tsc_t *tsc)
 {
-	tsc->ticks += (get_ticks() - tsc->last);
+	uint64_t t = get_ticks();
+	assert(tsc->last < t);
+	assert(tsc->cnt % 2 == 1);
+	tsc->ticks += (t - tsc->last);
+	tsc->cnt++;
 }
 
 static double __getMhz(void)
@@ -143,6 +151,15 @@ static inline void tsc_report(tsc_t *tsc)
 
 #define TSC_MEASURE_TICKS(_ticks, _code)       \
 uint64_t _ticks = ({                           \
+        tsc_t xtsc_;                           \
+        tsc_init(&xtsc_); tsc_start(&xtsc_);   \
+        do { _code } while (0);                \
+        tsc_pause(&xtsc_);                     \
+        tsc_getticks(&xtsc_);                  \
+});
+
+#define TSC_SET_TICKS(_ticks, _code)           \
+_ticks = ({                                   \
         tsc_t xtsc_;                           \
         tsc_init(&xtsc_); tsc_start(&xtsc_);   \
         do { _code } while (0);                \

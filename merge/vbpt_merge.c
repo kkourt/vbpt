@@ -796,6 +796,7 @@ void vbpt_merge_stats_do_report(char *prefix, vbpt_merge_stats_t *st)
 	#undef pr_stat
 	#undef pr_merge_ratio
 	#undef pr_ticks
+	#undef pr_ticks2
 }
 
 void vbpt_merge_stats_report(void)

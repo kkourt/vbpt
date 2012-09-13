@@ -25,6 +25,8 @@
 
 #define MIN(x,y) ((x) < (y) ? (x) : (y))
 
+DECLARE_VBPT_STATS();
+
 static inline uint16_t
 imba_limit(vbpt_node_t *node)
 {
@@ -528,6 +530,7 @@ update_highkey(vbpt_node_t *node, uint16_t parent_slot,
 {
 	assert(path->nodes[lvl]->kvp[parent_slot].val == &node->n_hdr);
 
+	printf("R U FUCKING KIDDING ME?\n");
 	uint64_t high_k = node->kvp[node->items_nr - 1].key;
 	while (true) {
 		vbpt_node_t *parent = path->nodes[lvl];
@@ -1186,11 +1189,14 @@ cow_needed(vbpt_tree_t *tree, ver_t *ver, int op)
 		return false;
 
 	// @ver must be a child of @tver
+	// WARNING: will slow things down considerably
+	#if 0
 	if (!ver_leq(ver, tver)) {
 		fprintf(stderr, "Error version:%p not a child of %p\n",
 		                 tver, ver);
 		assert(false);
 	}
+	#endif
 
 	return true;
 }
@@ -1368,16 +1374,17 @@ vbpt_insert(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t *data, vbpt_leaf_t **ol
 		return;
 	}
 
-	vbpt_path_t path[VBPT_MAX_LEVEL];
-	vbpt_search(tree, key, 1, path);
+	vbpt_path_t path;
+	vbpt_search(tree, key, 1, &path);
 
-	assert(path->height > 0);
-	vbpt_node_t *last = path->nodes[path->height-1];
-	uint16_t last_slot = path->slots[path->height-1];
-	vbpt_hdr_t *old = insert_ptr(last, last_slot, key, &data->l_hdr);
+	assert(path.height > 0);
+	uint16_t lvl      = path.height - 1;
+	vbpt_node_t *node = path.nodes[lvl];
+	uint16_t slot     = path.slots[lvl];
+	vbpt_hdr_t *old = insert_ptr(node, slot, key, &data->l_hdr);
 
 	if (old_data)
-		*old_data = hdr2leaf(old);
+		*old_data = old ? hdr2leaf(old) : NULL;
 	else if (old != NULL)
 		vbpt_hdr_putref(old);
 }
@@ -1386,9 +1393,10 @@ vbpt_insert(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t *data, vbpt_leaf_t **ol
 void
 vbpt_delete_ptr(vbpt_tree_t *tree, vbpt_path_t *path, vbpt_hdr_t **hdr_ptr)
 {
-	uint16_t lvl = path->height -1;
+	assert(path->height > 0);
+	uint16_t lvl      = path->height -1;
 	vbpt_node_t *node = path->nodes[lvl];
-	uint16_t slot = path->slots[lvl];
+	uint16_t slot     = path->slots[lvl];
 	vbpt_hdr_t *hdr_ret = delete_ptr(tree, node, slot, path, lvl);
 
 	if (hdr_ptr)
@@ -1403,13 +1411,14 @@ vbpt_delete(vbpt_tree_t *tree, uint64_t key, vbpt_leaf_t **data)
 	if (tree->root == NULL)
 		goto end;
 
-	vbpt_path_t path[VBPT_MAX_LEVEL];
-	vbpt_search(tree, key, -1, path);
-	uint16_t lvl = path->height - 1;
-	uint16_t slot = path->slots[lvl];
-	vbpt_node_t *node = path->nodes[lvl];
+	vbpt_path_t path;
+	vbpt_search(tree, key, -1, &path);
+	assert(path.height > 0);
+	uint16_t lvl      = path.height - 1;
+	uint16_t slot     = path.slots[lvl];
+	vbpt_node_t *node = path.nodes[lvl];
 	if (slot < node->items_nr && node->kvp[slot].key == key) {
-		vbpt_hdr_t *hdr_ret = delete_ptr(tree, node, slot, path, lvl);
+		vbpt_hdr_t *hdr_ret = delete_ptr(tree, node, slot, &path, lvl);
 		ret = hdr2leaf(hdr_ret);
 	}
 
@@ -1420,6 +1429,34 @@ end:
 		vbpt_leaf_putref(ret);
 }
 
+/**
+ * get a leaf for the specified key.
+ *  leaf (or NULL) will be placed on @leaf
+ */
+vbpt_leaf_t *
+vbpt_get(vbpt_tree_t *tree,  uint64_t key)
+{
+	vbpt_leaf_t *ret = NULL;
+	if (tree->root == NULL) {
+		return ret;
+	}
+
+	vbpt_path_t path;
+	vbpt_search(tree, key, 0, &path);
+	if (path.height == 0) {
+		return ret;
+	}
+
+	assert(path.height > 0);
+	uint16_t lvl      = path.height - 1;
+	uint16_t slot     = path.slots[lvl];
+	vbpt_node_t *node = path.nodes[lvl];
+	if (slot < node->items_nr && node->kvp[slot].key == key) {
+		ret = hdr2leaf(node->kvp[slot].val);
+	}
+
+	return ret;
+}
 
 #if defined(VBPT_TEST)
 #include "vbpt_gv.h"
@@ -1630,3 +1667,30 @@ int main(int UNUSED argc, const char UNUSED *argv[])
 	return 0;
 }
 #endif
+
+
+void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
+{
+	#define pr_ticks(x__) do { \
+		uint64_t t__ = tsc_getticks(&st->x__);  \
+		uint64_t c__ = st->x__.cnt;             \
+		double p__ = t__ / (double)total_ticks; \
+		if (p__ < -0.1) \
+			break; \
+		printf("%s" "%16s" ": %6.1lfM (%4.1lf%%) cnt:%7lu\n", \
+		        prefix, "" #x__, t__/(1024*1024.0), p__*100, c__); \
+	} while (0)
+
+	pr_ticks(txt_try_commit);
+	pr_ticks(txtree_alloc);
+	pr_ticks(logtree_insert);
+	pr_ticks(logtree_get);
+
+	#undef pr_ticks
+}
+
+void vbpt_stats_report(uint64_t total_ticks)
+{
+	tmsg("VBPT stats\n");
+	vbpt_stats_do_report("\t", &VbptStats, total_ticks);
+}
