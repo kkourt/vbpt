@@ -11,7 +11,6 @@
 #define VBPT_KEY_MAX UINT64_MAX
 
 //#define XDEBUG_MERGE
-static __thread vbpt_merge_stats_t MergeStats = {0};
 
 // forward declaration
 static inline int vbpt_cur_maybe_delete(vbpt_cur_t *c);
@@ -217,6 +216,7 @@ vbpt_cur_verify(vbpt_cur_t *cur)
 		return;
 	}
 
+	#if !defined(NDEBUG)
 	uint16_t nslot = path->slots[path->height -1];
 	vbpt_node_t *node = path->nodes[path->height -1];
 	assert(nslot < node->items_nr);
@@ -226,8 +226,10 @@ vbpt_cur_verify(vbpt_cur_t *cur)
 	} else {
 		assert(node_key == cur->range.key + cur->range.len - 1);
 	}
+	#endif
 }
 
+__attribute__((unused))
 static void
 vbpt_cur_next_verify(vbpt_cur_t *ocur, vbpt_cur_t *cur)
 {
@@ -269,12 +271,14 @@ vbpt_cur_next_leaf_null(vbpt_cur_t *cur)
 	}
 
 	// The NULL range has ended
+	#if !defined(NDEBUG)
 	vbpt_path_t *path = &cur->path;
 	assert(path->height > 0);
 	uint16_t nslot = path->slots[path->height -1];
 	vbpt_node_t *node = path->nodes[path->height -1];
 	assert(nslot < node->items_nr);
 	assert(node->kvp[nslot].key == range_last_key + 1);
+	#endif
 	cur->range.key = range_last_key + 1;
 	cur->range.len = 1;
 	cur->null_maxkey = 0;
@@ -660,9 +664,9 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 	old_hdr = vbpt_insert_ptr(p_pnode, p_pslot, p_key, new_hdr);
 	assert(old_hdr == p_hdr);
 	if (p_hdr) {
-		tsc_t t2; tsc_init(&t2); tsc_start(&t2);
+		VBPT_MERGE_START_TIMER(cur_do_replace_putref);
 		vbpt_hdr_putref(p_hdr);
-		tsc_pause(&t2); MergeStats.cur_do_replace_putref_ticks += tsc_getticks(&t2);
+		VBPT_MERGE_STOP_TIMER(cur_do_replace_putref);
 	} else {
 		assert(vbpt_cur_null(pc));
 		if (pc->path.height != 0) {
@@ -686,7 +690,7 @@ bool
 vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
                  ver_t *jv, uint16_t p_dist)
 {
-	tsc_t t; tsc_init(&t); tsc_start(&t);
+	VBPT_MERGE_START_TIMER(cur_replace);
 	//dmsg("REPLACE: "); vbpt_cur_print(pc);
 	//dmsg("WITH:    "); vbpt_cur_print(gc);
 	//tmsg("REPLACE %s WITH %s\n", vbpt_cur_str(pc), vbpt_cur_str((vbpt_cur_t *)gc));
@@ -695,12 +699,11 @@ vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 		ret = (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc, jv, p_dist));
 	} else {
 		tsc_t t2; tsc_init(&t2); tsc_start(&t2);
+		VBPT_MERGE_START_TIMER(cur_do_replace);
 		ret = vbpt_cur_do_replace(pc, gc, jv, p_dist);
-		tsc_pause(&t2); MergeStats.cur_do_replace_ticks += tsc_getticks(&t2);
-		MergeStats.cur_do_replace_count++;
+		VBPT_MERGE_STOP_TIMER(cur_do_replace);
 	}
-
-	tsc_pause(&t); MergeStats.cur_replace_ticks += tsc_getticks(&t);
+	VBPT_MERGE_STOP_TIMER(cur_replace);
 	return ret;
 }
 
@@ -740,70 +743,6 @@ vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree)
 }
 
 
-void vbpt_merge_stats_get(vbpt_merge_stats_t *stats)
-{
-	*stats = MergeStats;
-}
-
-void vbpt_merge_stats_do_report(char *prefix, vbpt_merge_stats_t *st)
-{
-	#define pr_stat(x__) \
-		printf("%s" # x__ ": %lu\n", prefix, st->x__)
-
-	#define pr_merge_ratio(x__) \
-		printf("%s" # x__ ": %lu  " #x__ "/merge: %.2lf\n", \
-		       prefix, st->x__, (double)st->x__ / (double)st->merges)
-
-	#define pr_ticks(x__) do { \
-		double p__ = (double)st->x__ / (double)st->merge_ticks; \
-		if (p__ < 0.1) \
-			break; \
-		printf("%s" # x__ ": %lu (%.1lf%%)\n", prefix, st->x__, p__*100); \
-	} while (0)
-
-	#define pr_ticks2(ticks__, cnt__) do { \
-		unsigned long t__ = st->ticks__;                   \
-		double p__ =  t__ / (double)st->merge_ticks;       \
-		if (p__ < 0.1)                                     \
-			break;                                     \
-		unsigned long c__ = st->cnt__;                     \
-		unsigned long a__ = t__ / c__;                     \
-		printf("%s" # ticks__ ": %lu (%.2lf%%) cnt:%lu (%lu ticks/call)\n",\
-		        prefix, t__, p__, c__, a__);               \
-	} while (0)
-
-	pr_stat(join_failed);
-	pr_stat(gc_old);
-	pr_stat(pc_old);
-	pr_stat(both_null);
-	pr_stat(pc_null);
-	pr_stat(gc_null);
-	pr_stat(merges);
-	pr_merge_ratio(merge_steps);
-	printf("%smerge_steps_max:%lu\n", prefix, st->merge_steps_max);
-	pr_merge_ratio(merge_ticks);
-	printf("%smerge_ticks_max:%lu\n", prefix, st->merge_ticks_max);
-	pr_ticks(cur_down_ticks);
-	pr_ticks(cur_next_ticks);
-	pr_ticks(do_merge_ticks);
-	pr_ticks(ver_join_ticks);
-	pr_ticks(ver_rebase_ticks);
-	pr_ticks(cur_sync_ticks);
-	pr_ticks(cur_replace_ticks);
-	pr_ticks2(cur_do_replace_ticks, cur_do_replace_count);
-	pr_ticks2(cur_do_replace_putref_ticks, cur_do_replace_count);
-
-	#undef pr_stat
-	#undef pr_merge_ratio
-	#undef pr_ticks
-	#undef pr_ticks2
-}
-
-void vbpt_merge_stats_report(void)
-{
-	tmsg("Merge stats\n");
-	vbpt_merge_stats_do_report("\t", &MergeStats);
-}
 
 /**
  * helper function for merging when cursors are at the same range
@@ -825,7 +764,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
         const vbpt_tree_t *gtree, vbpt_tree_t *ptree,
         ver_t *gv, ver_t  *pv, uint16_t g_dist, uint16_t p_dist, ver_t *jv)
 {
-	MergeStats.merge_steps++;
+	VBPT_MERGE_INC_COUNTER(merge_steps);
 	assert(vbpt_range_eq(&gc->range, &pc->range));
 	ver_t *gc_v = vbpt_cur_ver(gc);
 	ver_t *pc_v = vbpt_cur_ver(pc);
@@ -852,7 +791,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		#if defined(XDEBUG_MERGE)
 		printf("NO CHANGES in gc_v\n");
 		#endif
-		MergeStats.gc_old++;
+		VBPT_MERGE_INC_COUNTER(gc_old);
 		return 1;
 	}
 
@@ -869,7 +808,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		#if defined(XDEBUG_MERGE)
 		printf("Only gc_v changed\n");
 		#endif
-		MergeStats.pc_old++;
+		VBPT_MERGE_INC_COUNTER(pc_old);
 		// check if private tree read something that is under the
 		// current (changed in the global tree) range. If it did,
 		// it would read an older value, so we need to abort.
@@ -892,18 +831,18 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	 */
 	 #if defined(XDEBUG_MERGE)
 	 printf("Both changed\n");
-	 #endif
 	 //printf("base: %s\n", ver_str(jv));
-	 //printf("pc:"); vbpt_cur_print(pc);
-	 //printf("gc:"); vbpt_cur_print(gc);
-	 //printf("\n");
+	 printf("pc:"); vbpt_cur_print(pc);
+	 printf("gc:"); vbpt_cur_print(gc);
+	 printf("\n");
+	 #endif
 
 	// Handle NULL cases: NULL cases are special because we lack information
 	// to precisely check for conflicts. For example, we can't go deeper --
 	// all information on the tree is lost. It might be a good idea to make
 	// (more) formal arguments about the correctness of the cases below
 	if (vbpt_cur_null(pc) && vbpt_cur_null(gc)) {
-		MergeStats.both_null++;
+		VBPT_MERGE_INC_COUNTER(both_null);
 		#if defined(XDEBUG_MERGE)
 		printf("Both are NULL\n");
 		#endif
@@ -914,7 +853,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		int ret = vbpt_log_rs_range_exists(plog, range, p_dist) ? -1:1;
 		return ret;
 	} else if (vbpt_cur_null(pc)) {
-		MergeStats.pc_null++;
+		VBPT_MERGE_INC_COUNTER(pc_null);
 		#if defined(XDEBUG_MERGE)
 		printf("pc is NULL\n");
 		#endif
@@ -927,7 +866,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		//printf("trying to replace pc with gc\n");
 		return vbpt_cur_replace(pc, gc, jv, p_dist) ? 1: -1;
 	} else if (vbpt_cur_null(gc)) {
-		MergeStats.gc_null++;
+		VBPT_MERGE_INC_COUNTER(gc_null);
 		#if defined(XDEBUG_MERGE)
 		printf("gc is NULL\n");
 		#endif
@@ -1011,31 +950,30 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 bool
 vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 {
-	unsigned long msteps = MergeStats.merge_steps;
-	tsc_t tsc_, tsc2_;
-	tsc_init(&tsc_); tsc_start(&tsc_);
+	VBPT_MERGE_START_TIMER(merge);
+
 	#if defined(XDEBUG_MERGE)
 	dmsg("Global  "); vbpt_tree_print_limit((vbpt_tree_t *)gt, true, 1);
 	dmsg("Private "); vbpt_tree_print_limit(pt, true, 1);
 	#endif
-	#define TSC2_START() { tsc_init(&tsc2_); tsc_start(&tsc2_); }
-	#define TSC2_END()   ({tsc_pause(&tsc2_); tsc_getticks(&tsc2_);})
 
-	MergeStats.merges++;
+
+	//VBPT_MERGE_START_TIMER(cur_init);
 	vbpt_cur_t gc, pc;
 	vbpt_cur_init(&gc, (vbpt_tree_t *)gt);
 	vbpt_cur_init(&pc, pt);
 	bool merge_ok = true;
+	//VBPT_MERGE_STOP_TIMER(cur_init);
 
-	TSC2_START()
 	uint16_t g_dist, p_dist;
 	ver_t *hpver = NULL; // initialize to shut the compiler up
 	ver_t *gver = gt->ver;
 	ver_t *pver = pt->ver;
+	//VBPT_MERGE_START_TIMER(ver_join);
 	ver_t *vj = ver_join(gver, pver, &hpver, &g_dist, &p_dist);
-	MergeStats.ver_join_ticks += TSC2_END();
+	//VBPT_MERGE_STOP_TIMER(ver_join);
 	if (vj == VER_JOIN_FAIL) {
-		MergeStats.join_failed++;
+		VBPT_MERGE_INC_COUNTER(join_failed);
 		merge_ok = false;
 		goto end;
 	}
@@ -1045,54 +983,53 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	#endif
 
 	while (!(vbpt_cur_end(&gc) && vbpt_cur_end(&pc))) {
+		//VBPT_MERGE_START_TIMER(cur_sync);
 		assert(vbpt_path_verify((vbpt_tree_t *)gt, &gc.path));
 		assert(vbpt_path_verify(pt, &pc.path));
-		TSC2_START();
 		vbpt_cur_sync(&gc, &pc);
-		MergeStats.cur_sync_ticks += TSC2_END();
-		TSC2_START();
+		//VBPT_MERGE_STOP_TIMER(cur_sync);
+
+		VBPT_MERGE_START_TIMER(do_merge);
 		int ret = do_merge(&gc, &pc, gt, pt, gver, pver, g_dist, p_dist, vj);
-		MergeStats.do_merge_ticks += TSC2_END();
+		VBPT_MERGE_STOP_TIMER(do_merge);
 		if (ret == -1) {
 			merge_ok = false;
 			goto end;
 		} else if (ret == 0) {
-			TSC2_START();
+			//VBPT_MERGE_START_TIMER(cur_down);
 			vbpt_cur_down(&gc);
 			vbpt_cur_down(&pc);
-			MergeStats.cur_down_ticks += TSC2_END();
+			//VBPT_MERGE_STOP_TIMER(cur_down);
 		} else if (ret == 1) {
-			TSC2_START();
+			//VBPT_MERGE_START_TIMER(cur_next);
 			vbpt_cur_next(&gc);
 			vbpt_cur_next(&pc);
-			MergeStats.cur_next_ticks += TSC2_END();
+			//VBPT_MERGE_STOP_TIMER(cur_next);
 		} else assert(false && "This should never happen");
 	}
 	/* success: fix version tree */
-	TSC2_START();
+	//VBPT_MERGE_START_TIMER(ver_rebase);
 	assert(!ver_chain_has_branch(pver, hpver));
 	ver_rebase(hpver, gver);
 	if (vbase)
 		*vbase = gver;
 	assert(ver_ancestor(gver, pver));
 	assert(ver_ancestor(gver, hpver));
-	MergeStats.ver_rebase_ticks += TSC2_END();
+	//VBPT_MERGE_STOP_TIMER(ver_rebase);
 end:
-	tsc_pause(&tsc_);
-	msteps = MergeStats.merge_steps - msteps;
-	if (msteps > MergeStats.merge_steps_max)
-		MergeStats.merge_steps_max = msteps;
-	unsigned long mticks = tsc_getticks(&tsc_);
-	if (mticks > MergeStats.merge_ticks_max)
-		MergeStats.merge_ticks_max = mticks;
-	MergeStats.merge_ticks += mticks;
 	#if defined(XDEBUG_MERGE)
 	dmsg("MERGE %s\n", merge_ok ? "SUCCEEDED":"FAILED");
 	#endif
-	return merge_ok;
 
-	#undef TSC2_START
-	#undef TSC2_END
+	#if 0
+	if (merge_ok)
+		VBPT_INC_COUNTER(merge_ok);
+	else
+		VBPT_INC_COUNTER(merge_fail);
+	#endif
+
+	VBPT_MERGE_STOP_TIMER(merge);
+	return merge_ok;
 }
 
 #if defined(VBPT_SYNC_TEST)

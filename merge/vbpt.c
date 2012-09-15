@@ -1598,6 +1598,46 @@ int main(int UNUSED argc, const char UNUSED *argv[])
 }
 #endif
 
+#if 0
+void vbpt_merge_stats_do_report(char *prefix, vbpt_merge_stats_t *st)
+{
+	#define pr_stat(x__) \
+		printf("%s" # x__ ": %lu\n", prefix, st->x__)
+
+	#define pr_merge_ratio(x__) \
+		printf("%s" # x__ ": %lu  " #x__ "/merge: %.2lf\n", \
+		       prefix, st->x__, (double)st->x__ / (double)st->merges)
+
+	#define pr_ticks(x__) do { \
+		double p__ = (double)st->x__ / (double)st->merge_ticks; \
+		if (p__ < 0.1) \
+			break; \
+		printf("%s" # x__ ": %lu (%.1lf%%)\n", prefix, st->x__, p__*100); \
+	} while (0)
+
+	#define pr_ticks2(ticks__, cnt__) do { \
+		unsigned long t__ = st->ticks__;                   \
+		double p__ =  t__ / (double)st->merge_ticks;       \
+		if (p__ < 0.1)                                     \
+			break;                                     \
+		unsigned long c__ = st->cnt__;                     \
+		unsigned long a__ = c__ ? t__ / c__ : 0;           \
+		printf("%s" # ticks__ ": %lu (%.2lf%%) cnt:%lu (%lu ticks/call)\n",\
+		        prefix, t__, p__, c__, a__);               \
+	} while (0)
+
+	pr_stat(merges);
+	pr_merge_ratio(merge_steps);
+	printf("%smerge_steps_max:%lu\n", prefix, st->merge_steps_max);
+	printf("%smerge_ticks_max:%lu\n", prefix, st->merge_ticks_max);
+
+	#undef pr_stat
+	#undef pr_merge_ratio
+	#undef pr_ticks
+	#undef pr_ticks2
+}
+#endif
+
 
 void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 {
@@ -1605,16 +1645,47 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 		uint64_t t__ = tsc_getticks(&st->x__);  \
 		uint64_t c__ = st->x__.cnt;             \
 		double p__ = t__ / (double)total_ticks; \
-		if (p__ < -0.1) \
+		if (p__ < 0.09) \
 			break; \
-		printf("%s" "%16s" ": %6.1lfM (%4.1lf%%) cnt:%7lu\n", \
-		        prefix, "" #x__, t__/(1024*1024.0), p__*100, c__); \
+		printf("%s" "%24s" ": %6.1lfM (%4.1lf%%) cnt:%9lu (avg:%6.1lfK)\n", \
+		        prefix, "" #x__, t__/(1000*1000.0), p__*100, c__, t__/(1000.0*c__)); \
 	} while (0)
+
+	#define pr_cnt(x__) \
+		printf("%s" "%24s" ": %lu\n", prefix, "" #x__, st->x__)
 
 	pr_ticks(txt_try_commit);
 	pr_ticks(txtree_alloc);
+	pr_ticks(txtree_dealloc);
 	pr_ticks(logtree_insert);
 	pr_ticks(logtree_get);
+	pr_ticks(file_pread);
+	pr_ticks(file_pwrite);
+	pr_ticks(cow_leaf_write);
+	pr_ticks(xt1);
+	pr_ticks(m.merge);
+	pr_ticks(m.cur_do_replace);
+	pr_ticks(m.cur_do_replace_putref);
+	pr_ticks(m.cur_down);
+	pr_ticks(m.cur_next);
+	pr_ticks(m.do_merge);
+	pr_ticks(m.ver_join);
+	pr_ticks(m.ver_rebase);
+	pr_ticks(m.cur_sync);
+	pr_ticks(m.cur_replace);
+	pr_ticks(m.cur_init);
+	pr_cnt(commit_ok);
+	pr_cnt(commit_fail);
+	//pr_cnt(commit_merge_ok);
+	//pr_cnt(commit_merge_fail);
+	//pr_cnt(merge_ok);
+	//pr_cnt(merge_fail);
+	//pr_cnt(m.gc_old);
+	//pr_cnt(m.pc_old);
+	//pr_cnt(m.both_null);
+	//pr_cnt(m.pc_null);
+	//pr_cnt(m.gc_null);
+	//pr_cnt(m.join_failed);
 
 	#undef pr_ticks
 }
@@ -1622,5 +1693,5 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 void vbpt_stats_report(uint64_t total_ticks)
 {
 	tmsg("VBPT stats\n");
-	vbpt_stats_do_report("\t", &VbptStats, total_ticks);
+	vbpt_stats_do_report("  ", &VbptStats, total_ticks);
 }

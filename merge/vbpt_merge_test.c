@@ -149,7 +149,6 @@ vbpt_merge_test(vbpt_tree_t *t,
 		print_ticks(t_ins2_b, t_ins2_a);
 		print_ticks(t_merge_log, t_ins2_a);
 		print_ticks(t_merge_vbpt, t_ins2_a);
-		vbpt_merge_stats_report();
 		printf("----\n");
 	}
 	#undef print_ticks
@@ -248,7 +247,6 @@ struct merge_thr_stats {
 	unsigned long      merge_failures;
 	unsigned long      successes;
 	unsigned long      commit_attempts;
-	vbpt_merge_stats_t merge_stats;
 	vbpt_mm_stats_t    mm_stats;
 	unsigned long      tid;
 	uint64_t           txtree_alloc_ticks;
@@ -286,16 +284,16 @@ merge_thr_print_stats(struct merge_thr_arg *arg)
 	printf("  merges: %5lu", s->merges);
 	printf("  failures: %5lu", s->failures);
 	printf("  merge failures: %5lu\n", s->merge_failures);
-	pr_ticks(merge_stats.merge_ticks);
+	//pr_ticks(merge_stats.merge_ticks);
 	pr_ticks(txtree_alloc_ticks);
 	pr_ticks(insert_ticks);
 	pr_ticks(finalize_ticks);
 	pr_ticks(commit_ticks);
-	printf("  Merge Stats:\n");
-	uint64_t merge_ticks = s->merge_stats.merge_ticks;
-	printf("\tmerge ticks: %lu [merge/total:%lf]\n",
-	          merge_ticks, (double)merge_ticks/(double)arg->ticks);
-	vbpt_merge_stats_do_report("\t", &s->merge_stats);
+	//printf("  Merge Stats:\n");
+	//uint64_t merge_ticks = s->merge_stats.merge_ticks;
+	//printf("\tmerge ticks: %lu [merge/total:%lf]\n",
+	//         merge_ticks, (double)merge_ticks/(double)arg->ticks);
+	//vbpt_merge_stats_do_report("\t", &s->merge_stats);
 	printf("\tmm_allocations: %lu\n", s->mm_stats.nodes_allocated);
 }
 
@@ -380,7 +378,6 @@ merge_test_thr(void *arg_)
 	tsc_pause(&tsc);
 	arg->ticks = tsc_getticks(&tsc);
 	pthread_barrier_wait(arg->barrier);
-	vbpt_merge_stats_get(&arg->stats.merge_stats);
 	vbpt_mm_stats_get(&arg->stats.mm_stats);
 	return NULL;
 }

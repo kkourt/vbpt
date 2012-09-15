@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 #include "vbpt.h"
+#include "vbpt_range.h"
 #include "ver.h"
 
 /**
@@ -12,7 +13,6 @@
  */
 
 typedef struct vbpt_cur   vbpt_cur_t;
-typedef struct vbpt_range vbpt_range_t;
 
 vbpt_cur_t *vbpt_cur_alloc(vbpt_tree_t *);
 void vbpt_cur_free(vbpt_cur_t *);
@@ -45,13 +45,6 @@ bool vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree);
  */
 
 /**
- * Key ranges
- */
-struct vbpt_range {
-	uint64_t key, len;
-};
-
-/**
  * Cursor:
  *  We keep an explicit range, because the nodes in the path might not contain
  *  enough information about the current range (e.g., in cases where no nodes
@@ -73,66 +66,5 @@ vbpt_cur_null(const vbpt_cur_t *c)
 {
 	return c->flags.null != 0;
 }
-
-// return true if the two versions are equal
-static inline bool
-vbpt_range_eq(const vbpt_range_t *r1, const vbpt_range_t *r2)
-{
-	return r1->key == r2->key && r1->len == r2->len;
-}
-
-// return true if r1 <= r2 -- i.e., r1 is fully included in r2
-static inline bool
-vbpt_range_leq(const vbpt_range_t *r1, const vbpt_range_t *r2)
-{
-	if (r1->key < r2->key)
-		return false;
-
-	// be vewy vewy cawefull of ovewflows
-	uint64_t x = r1->key - r2->key;
-	if (x > r2->len)
-		return false;
-	if (r2->len - x < r1->len)
-		return false;
-	return true;
-}
-
-// return true if r1 < r2 -- i.e., r1 is strictly included in r1
-static inline bool
-vbpt_range_lt(const vbpt_range_t *r1, const vbpt_range_t *r2)
-{
-	if (vbpt_range_eq(r1, r2))
-		return false;
-	return vbpt_range_leq(r1, r2);
-}
-
-/* debugging */
-struct vbpt_merge_stats {
-	unsigned long gc_old;
-	unsigned long pc_old;
-	unsigned long both_null;
-	unsigned long pc_null;
-	unsigned long gc_null;
-	unsigned long merge_steps;
-	unsigned long merge_steps_max;
-	unsigned long merges;
-	unsigned long join_failed;
-	unsigned long merge_ticks;
-	unsigned long merge_ticks_max;
-	unsigned long cur_down_ticks;
-	unsigned long cur_next_ticks;
-	unsigned long do_merge_ticks;
-	unsigned long ver_join_ticks;
-	unsigned long ver_rebase_ticks;
-	unsigned long cur_sync_ticks;
-	unsigned long cur_replace_ticks;
-	unsigned long cur_do_replace_ticks;
-	unsigned long cur_do_replace_count;
-	unsigned long cur_do_replace_putref_ticks;
-};
-typedef struct vbpt_merge_stats vbpt_merge_stats_t;
-void vbpt_merge_stats_get(vbpt_merge_stats_t *stats);
-void vbpt_merge_stats_report(void);
-void vbpt_merge_stats_do_report(char *prefix, vbpt_merge_stats_t *st);
 
 #endif /* VBPT_MERGE_H */

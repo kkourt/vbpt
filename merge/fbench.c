@@ -11,6 +11,7 @@
 #include "vbpt_mtree.h"
 #include "vbpt_merge.h"
 #include "vbpt_tx.h"
+#include "vbpt_mm.h"
 
 #include "mt_lib.h"
 #include "tsc.h"
@@ -32,6 +33,8 @@ init_vbpt(vbpt_tree_t *tree, size_t size)
 	size_t rem = size % bsize;
 	if (rem)
 		vbpt_file_pwrite(tree, nb*bsize, buff, rem);
+
+	//vbpt_tree_print_limit(tree, true, 2);
 }
 
 /* initialize file by writting @size 'a' characters */
@@ -115,8 +118,9 @@ vm_drop_caches(int i)
 struct targ {
 	int tid;                  // thread id
 	int nthreads;             // total number of threads
-	int nb;                   // total number of blocks
-	int bsize;                // block size
+	unsigned long nb;         // total number of blocks
+	unsigned long bsize;      // block size
+	unsigned long b0, b_step, b_end; // iteration parameters for thread
 	char *fname;              // filename for t_fs
 	char *buff;               // this is to be used by t_mem()
 	int  fd;                  // t_fs()
@@ -124,8 +128,8 @@ struct targ {
 	unsigned int core;        // core this thread is affined to
 	pthread_barrier_t *tbar;  // barrier
 	uint64_t ticks;           // ticks
-	vbpt_merge_stats_t merge_stats;
 	vbpt_stats_t      vbpt_stats;
+	vbpt_mm_stats_t   vbpt_mm_stats;
 };
 
 __attribute__((unused))
@@ -141,27 +145,24 @@ vbpt_thr_print_stats(struct targ *arg)
 
 	printf(" ticks=%.1lf M\n", arg->ticks/(1000*1000.0));
 	printf("  VBPT Stats:\n");
-	vbpt_stats_do_report("\t", &arg->vbpt_stats, arg->ticks);
-	printf("  Merge Stats:\n");
+	vbpt_stats_do_report("  ", &arg->vbpt_stats, arg->ticks);
+	vbpt_mm_stats_report("  ", &arg->vbpt_mm_stats);
+	#if 0
 	uint64_t merge_ticks = arg->merge_stats.merge_ticks;
 	printf("\tmerge ticks: %.1lf M [merge/total:%lf]\n",
 	          merge_ticks/(1000*1000.0),
 	          (double)merge_ticks/(double)arg->ticks);
 	vbpt_merge_stats_do_report("\t", &arg->merge_stats);
+	#endif
 }
 
-__attribute__((unused))
-static void *
-t_vbpt(void *arg)
+static void
+do_vbpt(struct targ *targ)
 {
-	struct targ *targ   = arg;
 	size_t t_bsize      = targ->bsize;
 	vbpt_mtree_t *mtree = targ->mtree;
 	char buff[t_bsize];
-	INIT_VBPT_STATS();
-	pthread_barrier_wait(targ->tbar);
-	TSC_SET_TICKS(targ->ticks, {
-	for (unsigned int b=targ->tid; b<targ->nb; b+=targ->nthreads) {
+	for (unsigned long b = targ->b0; b < targ->b_end; b += targ->b_step) {
 		while (1) {
 			vbpt_txtree_t *txt;
 			txt = vbpt_txtree_alloc(mtree);
@@ -174,15 +175,27 @@ t_vbpt(void *arg)
 
 			vbpt_logtree_finalize(txt->tree);
 			vbpt_txt_res_t ret = vbpt_txt_try_commit(txt, mtree, 2);
-			//update_stats(ret);
 			if (ret == VBPT_COMMIT_OK || ret == VBPT_COMMIT_MERGED)
 				break;
+
 		}
 	}
+}
+
+__attribute__((unused))
+static void *
+t_vbpt(void *arg)
+{
+	struct targ *targ   = arg;
+	vbpt_stats_init();
+	vbpt_mm_init();
+	pthread_barrier_wait(targ->tbar);
+	TSC_SET_TICKS(targ->ticks, {
+		do_vbpt(targ);
 	})
 	pthread_barrier_wait(targ->tbar);
-	vbpt_merge_stats_get(&targ->merge_stats);
 	vbpt_stats_get(&targ->vbpt_stats);
+	vbpt_mm_stats_get(&targ->vbpt_mm_stats);
 	pthread_barrier_wait(targ->tbar);
 	return NULL;
 }
@@ -197,8 +210,8 @@ t_fs(void *arg)
 
 	pthread_barrier_wait(targ->tbar);
 	//TSC_MEASURE_TICKS(ticks, {
-		for (unsigned int b=targ->tid; b<targ->nb; b+=targ->nthreads) {
-			int ret;
+		for (unsigned long b=targ->b0; b<targ->b_end; b+=targ->b_step) {
+			int ret __attribute__((unused));
 			ret = pread(targ->fd, buff, t_bsize, b*t_bsize);
 			assert(ret == t_bsize);
 			for (unsigned int i=0; i<t_bsize; i++)
@@ -224,7 +237,7 @@ t_mem(void *arg)
 
 	pthread_barrier_wait(t->tbar);
 	TSC_MEASURE_TICKS(ticks, {
-		for (unsigned int b=t->tid; b<t->nb; b+=t->nthreads) {
+		for (unsigned long b=t->b0; b<t->b_end; b+=t->b_step) {
 			/* copy from buffer */
 			memcpy(b_local, b_file + b*t->bsize, t->bsize);
 			/* modify */
@@ -280,6 +293,7 @@ int main(int argc, const char *argv[])
 	pthread_t   tids[ncpus];
 	struct targ targs[ncpus];
 	pthread_barrier_t tbar;
+	unsigned long nb_per_thr = nb / ncpus;
 
 	pthread_barrier_init(&tbar, NULL, ncpus+1);
 	bzero(targs, sizeof(targs));
@@ -288,6 +302,16 @@ int main(int argc, const char *argv[])
 		targs[i].nthreads = ncpus;
 		targs[i].bsize = bsize;
 		targs[i].nb = nb;
+
+		#if 0
+		targs[i].b0     = targs[i].tid;
+		targs[i].b_step = targs[i].nthreads;
+		targs[i].b_end  = targs[i].nb;
+		#endif
+
+		targs[i].b0     = nb_per_thr*i;
+		targs[i].b_step = 1;
+		targs[i].b_end  = nb_per_thr*(i+1);
 
 		#if defined(SAME_FILE)
 		targs[i].fd = openf(fname);

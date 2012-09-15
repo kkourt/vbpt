@@ -20,6 +20,7 @@ vbpt_file_pread(vbpt_tree_t *tree, off_t offset, void *buff, size_t len)
 	uint64_t key     = offset / VBPT_LEAF_SIZE;
 	off_t    src_off = offset % VBPT_LEAF_SIZE;
 	char     *dst    = buff;
+	VBPT_START_TIMER(file_pread);
 	while (len > 0) {
 		vbpt_leaf_t *leaf = vbpt_logtree_get(tree, key);
 		size_t cp_len; // copy length
@@ -48,6 +49,7 @@ vbpt_file_pread(vbpt_tree_t *tree, off_t offset, void *buff, size_t len)
 		len -= to_len;
 		key++;
 	}
+	VBPT_STOP_TIMER(file_pread);
 }
 
 
@@ -55,6 +57,7 @@ static void
 cow_leaf_write(vbpt_leaf_t *new, const vbpt_leaf_t *old,
                size_t dst_off, const void *src, size_t src_len)
 {
+	//VBPT_START_TIMER(cow_leaf_write);
 	// COW or zero part before dst_off
 	if (dst_off) {
 		size_t cp0_len = MIN(dst_off, old->d_len);
@@ -73,6 +76,7 @@ cow_leaf_write(vbpt_leaf_t *new, const vbpt_leaf_t *old,
 		end = old->d_len;
 	}
 	new->d_len = end;
+	//VBPT_STOP_TIMER(cow_leaf_write);
 }
 
 void
@@ -82,6 +86,8 @@ vbpt_file_pwrite(vbpt_tree_t *tree, off_t offset, const void *buff, size_t len)
 	off_t dst_off   = offset % VBPT_LEAF_SIZE;
 	const char *src = buff;
 	ver_t *ver    = tree->ver;
+
+	VBPT_START_TIMER(file_pwrite);
 	while (len > 0) {
 		size_t src_len = MIN(VBPT_LEAF_SIZE - dst_off, len);
 		const vbpt_leaf_t *old = vbpt_logtree_get(tree, key);
@@ -105,7 +111,9 @@ vbpt_file_pwrite(vbpt_tree_t *tree, off_t offset, const void *buff, size_t len)
 			if (dst_off + src_len > leaf->d_len)
 				leaf->d_len = dst_off + src_len;
 		} else {
+			VBPT_START_TIMER(xt1);
 			vbpt_leaf_t *new = vbpt_leaf_alloc(VBPT_LEAF_SIZE, ver);
+			VBPT_STOP_TIMER(xt1);
 			cow_leaf_write(new, old, dst_off, src, src_len);
 			vbpt_leaf_t *l;
 			vbpt_logtree_insert(tree, key, new, &l);
@@ -118,6 +126,7 @@ vbpt_file_pwrite(vbpt_tree_t *tree, off_t offset, const void *buff, size_t len)
 		src += src_len;
 		key++;
 	}
+	VBPT_STOP_TIMER(file_pwrite);
 }
 
 #if defined(VBPT_FILE_TEST)

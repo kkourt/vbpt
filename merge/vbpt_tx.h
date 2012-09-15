@@ -37,11 +37,14 @@ vbpt_txtree_alloc(vbpt_mtree_t *mtree)
 	return ret;
 }
 
+
 static inline void
 vbpt_txtree_dealloc(vbpt_txtree_t *txt)
 {
+	VBPT_START_TIMER(txtree_dealloc);
 	vbpt_logtree_dealloc(txt->tree);
 	free(txt);
+	VBPT_STOP_TIMER(txtree_dealloc);
 }
 
 /* transaction result */
@@ -59,6 +62,28 @@ static char __attribute__((unused)) *vbpt_txt_res2str[] = {
 	[VBPT_COMMIT_FAILED]       =  "COMMIT FAILED"
 };
 
+static inline void
+vbpt_txt_update_stats(vbpt_txt_res_t ret)
+{
+
+	switch (ret) {
+		case VBPT_COMMIT_FAILED:
+		VBPT_INC_COUNTER(commit_fail);
+		break;
+
+		case VBPT_COMMIT_MERGE_FAILED:
+		VBPT_INC_COUNTER(commit_merge_fail);
+		break;
+
+		case VBPT_COMMIT_OK:
+		VBPT_INC_COUNTER(commit_ok);
+		break;
+
+		case VBPT_COMMIT_MERGED:
+		VBPT_INC_COUNTER(commit_merge_ok);
+		break;
+	}
+}
 
 static inline vbpt_txt_res_t
 vbpt_txt_try_commit(vbpt_txtree_t *txt, vbpt_mtree_t *mt,
@@ -96,6 +121,7 @@ vbpt_txt_try_commit(vbpt_txtree_t *txt, vbpt_mtree_t *mt,
 end:
 	free(txt);
 	VBPT_STOP_TIMER(txt_try_commit);
+	vbpt_txt_update_stats(ret);
 	return ret;
 }
 

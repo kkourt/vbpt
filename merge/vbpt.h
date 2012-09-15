@@ -269,19 +269,56 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks);
 
 extern __thread vbpt_stats_t VbptStats;
 
-struct vbpt_stats {
-	tsc_t txt_try_commit;
-	tsc_t logtree_insert;
-	tsc_t logtree_get;
-	tsc_t txtree_alloc;
-	tsc_t file_pread;
+struct vbpt_merge_stats {
+	uint64_t gc_old;
+	uint64_t pc_old;
+	uint64_t both_null;
+	uint64_t pc_null;
+	uint64_t gc_null;
+	uint64_t merge_steps;
+	uint64_t merge_steps_max;
+	uint64_t merges;
+	uint64_t join_failed;
+	tsc_t    merge;
+	tsc_t    cur_down;
+	tsc_t    cur_next;
+	tsc_t    do_merge;
+	tsc_t    ver_join;
+	tsc_t    ver_rebase;
+	tsc_t    cur_sync;
+	tsc_t    cur_replace;
+	tsc_t    cur_do_replace;
+	tsc_t    cur_do_replace_putref;
+	tsc_t    cur_init;
 };
 
+struct vbpt_stats {
+	tsc_t                    txt_try_commit;
+	tsc_t                    logtree_insert;
+	tsc_t                    logtree_get;
+	tsc_t                    txtree_alloc;
+	tsc_t                    txtree_dealloc;
+	tsc_t                    file_pread;
+	tsc_t                    file_pwrite;
+	tsc_t                    cow_leaf_write;
+	tsc_t                    xt1;
+	uint64_t                 commit_ok;
+	uint64_t                 commit_fail;
+	uint64_t                 commit_merge_ok;
+	uint64_t                 commit_merge_fail;
+	uint64_t                 merge_ok;
+	uint64_t                 merge_fail;
+	struct vbpt_merge_stats  m;
+};
+
+static inline void
+vbpt_stats_init(void)
+{
+	bzero(&VbptStats, sizeof(VbptStats));
+}
+
+
 #define DECLARE_VBPT_STATS() __thread vbpt_stats_t VbptStats
-#define INIT_VBPT_STATS()  do { \
-	bzero(&VbptStats, sizeof(VbptStats)); \
-	tsc_init(&VbptStats.txtree_alloc);    \
-} while (0)
 
 static inline void
 vbpt_stats_get(vbpt_stats_t *stats)
@@ -298,5 +335,20 @@ vbpt_stats_get(vbpt_stats_t *stats)
 	do {                               \
 		tsc_pause(&VbptStats._x);  \
 	} while (0)
+
+#define VBPT_INC_COUNTER(_x)  ((VbptStats._x)++)
+
+#define VBPT_MERGE_START_TIMER(_x)                    \
+	do {                                          \
+		tsc_start(&VbptStats.m._x); \
+	} while (0)
+
+#define VBPT_MERGE_STOP_TIMER(_x)                      \
+	do {                                           \
+		tsc_pause(&VbptStats.m._x);  \
+	} while (0)
+
+#define VBPT_MERGE_INC_COUNTER(_x)     ((VbptStats.m._x)++)
+#define VBPT_MERGE_ADD_COUNTER(_x, v)  ((VbptStats.m._x) += v)
 
 #endif /* VBPT_H_ */

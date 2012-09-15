@@ -131,6 +131,18 @@ vbpt_log_delete(vbpt_log_t *log, uint64_t key)
  * perform queries on logs
  */
 
+static inline size_t
+vbpt_log_rd_size(vbpt_log_t *log)
+{
+	return pset_elements(&log->rd_set);
+}
+
+static inline size_t
+vbpt_log_wr_size(vbpt_log_t *log)
+{
+	return phash_elements(&log->wr_set);
+}
+
 bool
 vbpt_log_ws_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth)
 {

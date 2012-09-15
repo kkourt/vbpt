@@ -36,18 +36,19 @@ vbpt_mm_stats_get(vbpt_mm_stats_t *stats)
 static void
 vbpt_cache_prealloc(void)
 {
-	const uint64_t prealloc_nodes = 16*1024;
-	const uint64_t prealloc_leafs = 16*1024;
+	const uint64_t prealloc_nodes = 32*1024;
+	const uint64_t prealloc_leafs = 32*1024;
 	for (uint64_t i=0; i<prealloc_nodes; i++) {
 		vbpt_node_t *node = xmalloc(VBPT_NODE_SIZE);
-		vbptCache.mm_stats.nodes_allocated++;
+		vbptCache.mm_stats.nodes_preallocated++;
 		node->mm_next = vbptCache.mm_nodes;
 		vbptCache.mm_nodes = node;
 		vbptCache.mm_nodes_nr++;
 	}
 	for (uint64_t i=0; i<prealloc_leafs; i++) {
-		vbpt_leaf_t *leaf = xmalloc(VBPT_LEAF_SIZE);
-		vbptCache.mm_stats.leafs_allocated++;
+		vbpt_leaf_t *leaf = xmalloc(sizeof(*leaf));
+		leaf->data = xmalloc(VBPT_LEAF_SIZE);
+		vbptCache.mm_stats.leafs_preallocated++;
 		leaf->mm_next = vbptCache.mm_leafs;
 		vbptCache.mm_leafs = leaf;
 		vbptCache.mm_leafs_nr++;
@@ -148,6 +149,7 @@ vbpt_node_dealloc(vbpt_node_t *node)
 vbpt_leaf_t *
 vbpt_leaf_alloc(size_t leaf_size, ver_t *ver)
 {
+	vbptCache.mm_stats.leafs_requested++;
 	vbpt_leaf_t *ret = vbpt_cache_get_leaf(leaf_size);
 	vbpt_hdr_init(&ret->l_hdr, ver, VBPT_LEAF);
 	ret->d_len = 0;
@@ -161,6 +163,7 @@ vbpt_leaf_alloc(size_t leaf_size, ver_t *ver)
 void
 vbpt_leaf_dealloc(vbpt_leaf_t *leaf)
 {
+	vbptCache.mm_stats.leafs_released++;
 	ver_putref(leaf->l_hdr.ver);
 	// add leaf to list
 	leaf->mm_next = vbptCache.mm_leafs;
@@ -168,3 +171,17 @@ vbpt_leaf_dealloc(vbpt_leaf_t *leaf)
 	vbptCache.mm_leafs_nr++;
 }
 
+void
+vbpt_mm_stats_report(char *prefix, vbpt_mm_stats_t *st)
+{
+
+	#define pr_cnt(x__) \
+		printf("%s" "%24s" ": %lu\n", prefix, "" #x__, st->x__)
+
+	pr_cnt(nodes_allocated);
+	pr_cnt(nodes_preallocated);
+	pr_cnt(leafs_allocated);
+	pr_cnt(leafs_preallocated);
+	pr_cnt(leafs_requested);
+	pr_cnt(leafs_released);
+}

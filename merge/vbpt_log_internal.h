@@ -1,7 +1,7 @@
 #ifndef VBPT_LOG_INTERNAL_H__
 #define VBPT_LOG_INTERNAL_H__
 
-// Intennal (implementation) of logs. We keep that in a separate file, so that
+// Internal (implementation) of logs. We keep that in a separate file, so that
 // it can by included by ver.h, which needs vbpt_log_t's size.
 
 // implementation details:
@@ -13,37 +13,36 @@
 //  because it is not trivial to make it persistent. It might make sense to do a
 //  Judy1 implementation to measure the performance hit.
 
-#include "phash.h"
 
 typedef struct vbpt_log vbpt_log_t;
 
 enum {
-	VBPT_LOG_UNINITIALIZED=0,
-	VBPT_LOG_STARTED = 1,
-	VBPT_LOG_FINALIZED,
+	VBPT_LOG_UNINITIALIZED = 0,
+	VBPT_LOG_STARTED       = 1,
+	VBPT_LOG_FINALIZED     = 2,
 };
 
+#if defined(VBPT_LOG_PHASH)
 /**
  * vbpt_log: log for changes in an object
  */
+#include "phash.h"
 struct vbpt_log {
 	unsigned state;
 	pset_t   rd_set;
 	pset_t   rm_set;
 	phash_t  wr_set;
 };
+#elif defined(VBPT_LOG_RANGE)
+#include "vbpt_range.h"
+struct vbpt_log {
+	unsigned state;
+	vbpt_range_t rd_range;
+	vbpt_range_t rm_range;
+	vbpt_range_t wr_range;
+};
+#endif
 
-static inline size_t
-vbpt_log_rd_size(vbpt_log_t *log)
-{
-	return pset_elements(&log->rd_set);
-}
-
-static inline size_t
-vbpt_log_wr_size(vbpt_log_t *log)
-{
-	return phash_elements(&log->wr_set);
-}
 
 // XXX: for ver_release()
 void vbpt_log_destroy(vbpt_log_t *log); // destroy a log (pairs with _init)
