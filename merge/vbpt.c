@@ -46,7 +46,7 @@ char *
 vbpt_hdr_str(vbpt_hdr_t *hdr)
 {
 	static char buff[128];
-	snprintf(buff, sizeof(buff), " (%s cnt:%u) ", ver_str(hdr->ver), hdr->h_refcnt.cnt);
+	snprintf(buff, sizeof(buff), " (%s cnt:%u) ", ver_str(hdr->ver), refcnt_(&hdr->h_refcnt));
 	return buff;
 }
 

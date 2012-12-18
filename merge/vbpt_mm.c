@@ -74,9 +74,18 @@ vbpt_cache_get_node(size_t node_size)
 	// NB: vbpt_hdr_putref() might end up calling vbpt_node_dealloc(),
 	//     which adds more nodes to the queue. We are using per-thread queues,
 	//     so it should be OK.
-	vbpt_kvp_t *kvp = node->kvp;
-	for (uint16_t i=0; i<node->items_nr; i++)
-		vbpt_hdr_putref(kvp[i].val);
+	if (node->items_nr != 0) {
+		vbpt_kvp_t *kvp = node->kvp;
+		if (kvp[0].val->type == VBPT_NODE) {
+			for (uint16_t i=0; i<node->items_nr; i++) {
+				vbpt_node_putref__(kvp[i].val);
+			}
+		} else if (kvp[0].val->type == VBPT_LEAF) {
+			for (uint16_t i=0; i<node->items_nr; i++) {
+				vbpt_leaf_putref__(kvp[i].val);
+			}
+		} else assert(false);
+	}
 	node->items_nr = 0;
 	//memset(node, 0, node_size);
 	VBPT_STOP_TIMER(vbpt_cache_get_node);

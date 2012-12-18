@@ -49,7 +49,7 @@ struct vbpt_node {
 	uint16_t           items_nr, items_total;
 	struct vbpt_node   *mm_next; // for mem queues
 	vbpt_kvp_t         kvp[];
-};
+} CACHE_ALIGNED;
 typedef struct vbpt_node vbpt_node_t;
 
 #if 0
@@ -70,7 +70,7 @@ struct vbpt_leaf {
 	size_t d_len, d_total_len;
 	struct vbpt_leaf   *mm_next; // for mem queues
 	char *data;
-};
+} CACHE_ALIGNED;
 typedef struct vbpt_leaf vbpt_leaf_t;
 
 struct vbpt_tree {
@@ -178,6 +178,22 @@ void vbpt_node_dealloc(vbpt_node_t *node);
 void vbpt_leaf_dealloc(vbpt_leaf_t *leaf);
 
 static inline void
+vbpt_leaf_release(refcnt_t *rfcnt)
+{
+	vbpt_hdr_t *hdr = refcnt2hdr(rfcnt);
+	vbpt_leaf_t *leaf = hdr2leaf(hdr);
+	vbpt_leaf_dealloc(leaf);
+}
+
+static inline void
+vbpt_node_release(refcnt_t *rfcnt)
+{
+	vbpt_hdr_t *hdr = refcnt2hdr(rfcnt);
+	vbpt_node_t *node = hdr2node(hdr);
+	vbpt_node_dealloc(node);
+}
+
+static inline void
 vbpt_hdr_release(refcnt_t *h_refcnt)
 {
 	vbpt_hdr_t *hdr = refcnt2hdr(h_refcnt);
@@ -197,6 +213,7 @@ vbpt_hdr_release(refcnt_t *h_refcnt)
 		assert(false);
 	}
 }
+
 
 static inline void
 vbpt_hdr_putref(vbpt_hdr_t *hdr)
@@ -226,9 +243,15 @@ vbpt_node_getref(vbpt_node_t *node)
 }
 
 static inline void
+vbpt_node_putref__(vbpt_hdr_t *n_hdr)
+{
+	refcnt_dec(&n_hdr->h_refcnt, vbpt_node_release);
+}
+
+static inline void
 vbpt_node_putref(vbpt_node_t *node)
 {
-	vbpt_hdr_putref(&node->n_hdr);
+	vbpt_node_putref__(&node->n_hdr);
 }
 
 static inline vbpt_leaf_t *
@@ -239,9 +262,15 @@ vbpt_leaf_getref(vbpt_leaf_t *leaf)
 }
 
 static inline void
+vbpt_leaf_putref__(vbpt_hdr_t *l_hdr)
+{
+	refcnt_dec(&l_hdr->h_refcnt, vbpt_leaf_release);
+}
+
+static inline void
 vbpt_leaf_putref(vbpt_leaf_t *leaf)
 {
-	vbpt_hdr_putref(&leaf->l_hdr);
+	vbpt_leaf_putref__(&leaf->l_hdr);
 }
 
 static inline ver_t *
