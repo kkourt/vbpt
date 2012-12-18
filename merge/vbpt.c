@@ -1184,6 +1184,7 @@ static void
 vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
             vbpt_path_t *path)
 {
+	VBPT_START_TIMER(vbpt_search);
 	vbpt_node_t *node = tree->root;
 	if (cow_needed(tree, node->n_hdr.ver, op))
 		node = cow_root(tree);
@@ -1274,6 +1275,7 @@ vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
 		node = node_next;
 		lvl++;
 	}
+	VBPT_STOP_TIMER(vbpt_search);
 }
 
 static void
@@ -1645,37 +1647,40 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 		uint64_t t__ = tsc_getticks(&st->x__);  \
 		uint64_t c__ = st->x__.cnt;             \
 		double p__ = t__ / (double)total_ticks; \
-		if (p__ < 0.09) \
+		if (p__ < -0.01) \
 			break; \
-		printf("%s" "%24s" ": %6.1lfM (%4.1lf%%) cnt:%9lu (avg:%6.1lfK)\n", \
+		printf("%s" "%24s" ": %6.1lfM (%4.1lf%%) cnt:%9lu (avg:%7.2lfK)\n", \
 		        prefix, "" #x__, t__/(1000*1000.0), p__*100, c__, t__/(1000.0*c__)); \
 	} while (0)
 
 	#define pr_cnt(x__) \
 		printf("%s" "%24s" ": %lu\n", prefix, "" #x__, st->x__)
 
+	#if defined(VBPT_STATS)
+	pr_ticks(vbpt_app);
 	pr_ticks(txt_try_commit);
 	pr_ticks(txtree_alloc);
+	pr_ticks(file_pread);
+	pr_ticks(file_pwrite);
+	pr_ticks(vbpt_cache_get_node);
+	pr_ticks(vbpt_search);
 	pr_ticks(txtree_dealloc);
 	pr_ticks(logtree_insert);
 	pr_ticks(logtree_get);
-	pr_ticks(file_pread);
-	pr_ticks(file_pwrite);
 	pr_ticks(cow_leaf_write);
-	pr_ticks(xt1);
 	pr_ticks(m.merge);
-	pr_ticks(m.cur_do_replace);
-	pr_ticks(m.cur_do_replace_putref);
-	pr_ticks(m.cur_down);
-	pr_ticks(m.cur_next);
-	pr_ticks(m.do_merge);
-	pr_ticks(m.ver_join);
-	pr_ticks(m.ver_rebase);
-	pr_ticks(m.cur_sync);
-	pr_ticks(m.cur_replace);
-	pr_ticks(m.cur_init);
-	pr_cnt(commit_ok);
-	pr_cnt(commit_fail);
+	//pr_ticks(m.cur_do_replace);
+	//pr_ticks(m.cur_do_replace_putref);
+	//pr_ticks(m.cur_down);
+	//pr_ticks(m.cur_next);
+	//pr_ticks(m.do_merge);
+	//pr_ticks(m.ver_join);
+	//pr_ticks(m.ver_rebase);
+	//pr_ticks(m.cur_sync);
+	//pr_ticks(m.cur_replace);
+	//pr_ticks(m.cur_init);
+	//pr_cnt(commit_ok);
+	//pr_cnt(commit_fail);
 	//pr_cnt(commit_merge_ok);
 	//pr_cnt(commit_merge_fail);
 	//pr_cnt(merge_ok);
@@ -1685,9 +1690,11 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 	//pr_cnt(m.both_null);
 	//pr_cnt(m.pc_null);
 	//pr_cnt(m.gc_null);
+	#endif
 	//pr_cnt(m.join_failed);
 
 	#undef pr_ticks
+	#undef pr_cnt
 }
 
 void vbpt_stats_report(uint64_t total_ticks)

@@ -128,6 +128,9 @@ struct targ {
 	unsigned int core;        // core this thread is affined to
 	pthread_barrier_t *tbar;  // barrier
 	uint64_t ticks;           // ticks
+	tsc_t                     app_ticks;
+	tsc_t                     rd_ticks;
+	tsc_t                     wr_ticks;
 	vbpt_stats_t      vbpt_stats;
 	vbpt_mm_stats_t   vbpt_mm_stats;
 };
@@ -136,6 +139,7 @@ __attribute__((unused))
 static void
 vbpt_thr_print_stats(struct targ *arg)
 {
+	#if defined(VBPT_FILE)
 	#define pr_ticks(x__) do { \
 		double p__ = (double)s->x__ / (double)arg->ticks; \
 		if (p__ < 0.1) \
@@ -146,7 +150,7 @@ vbpt_thr_print_stats(struct targ *arg)
 	printf(" ticks=%.1lf M\n", arg->ticks/(1000*1000.0));
 	printf("  VBPT Stats:\n");
 	vbpt_stats_do_report("  ", &arg->vbpt_stats, arg->ticks);
-	vbpt_mm_stats_report("  ", &arg->vbpt_mm_stats);
+	//vbpt_mm_stats_report("  ", &arg->vbpt_mm_stats);
 	#if 0
 	uint64_t merge_ticks = arg->merge_stats.merge_ticks;
 	printf("\tmerge ticks: %.1lf M [merge/total:%lf]\n",
@@ -154,6 +158,8 @@ vbpt_thr_print_stats(struct targ *arg)
 	          (double)merge_ticks/(double)arg->ticks);
 	vbpt_merge_stats_do_report("\t", &arg->merge_stats);
 	#endif
+
+	#endif // VBPT_FILE
 }
 
 static void
@@ -169,8 +175,10 @@ do_vbpt(struct targ *targ)
 
 			off_t off = b*t_bsize;
 			vbpt_file_pread(txt->tree, off, buff, t_bsize);
+			VBPT_START_TIMER(vbpt_app);
 			for (unsigned int i=0; i<t_bsize; i++)
 				buff[i] += targ->tid;
+			VBPT_STOP_TIMER(vbpt_app);
 			vbpt_file_pwrite(txt->tree, off, buff, t_bsize);
 
 			vbpt_logtree_finalize(txt->tree);
@@ -208,18 +216,32 @@ t_fs(void *arg)
 	size_t t_bsize = targ->bsize;
 	char buff[t_bsize];
 
+	tsc_init(&targ->app_ticks);
+	tsc_init(&targ->rd_ticks);
+	tsc_init(&targ->wr_ticks);
 	pthread_barrier_wait(targ->tbar);
-	//TSC_MEASURE_TICKS(ticks, {
+	TSC_SET_TICKS(targ->ticks, {
 		for (unsigned long b=targ->b0; b<targ->b_end; b+=targ->b_step) {
+
 			int ret __attribute__((unused));
+			#if 0
+			tsc_start(&targ->rd_ticks);
 			ret = pread(targ->fd, buff, t_bsize, b*t_bsize);
 			assert(ret == t_bsize);
+			tsc_pause(&targ->rd_ticks);
+
+			tsc_start(&targ->app_ticks);
 			for (unsigned int i=0; i<t_bsize; i++)
 				buff[i] += targ->tid;
+			tsc_pause(&targ->app_ticks);
+			#endif
+
+			tsc_start(&targ->wr_ticks);
 			ret = pwrite(targ->fd, buff, t_bsize, b*t_bsize);
 			assert(ret == t_bsize);
+			tsc_pause(&targ->wr_ticks);
 		}
-	//})
+	})
 	pthread_barrier_wait(targ->tbar);
 	//targ->ticks = ticks;
 	pthread_barrier_wait(targ->tbar);
@@ -367,6 +389,19 @@ int main(int argc, const char *argv[])
 	for (unsigned i=0; i<ncpus; i++) {
 		printf("T: %2u [tid:%d] ", i, targs[i].tid);
 		vbpt_thr_print_stats(targs+i);
+	}
+	#elif defined(SAME_FILE) || defined(SEP_FILES)
+	for (unsigned i=0; i<ncpus; i++) {
+		uint64_t total_ticksM  = targs[i].ticks/(1000*1000);
+		uint64_t app_ticksM  = tsc_getticks(&targs[i].app_ticks);
+		app_ticksM /= 1000*1000;
+		uint64_t rd_ticksM  = tsc_getticks(&targs[i].rd_ticks);
+		rd_ticksM /= 1000*1000;
+		uint64_t wr_ticksM  = tsc_getticks(&targs[i].wr_ticks);
+		wr_ticksM /= 1000*1000;
+		printf("T: %2u [tid:%d] ticks=%luM app=%luM rd=%luM wr=%luM\n",
+		        i, targs[i].tid,
+		        total_ticksM, app_ticksM, rd_ticksM, wr_ticksM);
 	}
 	#endif
 

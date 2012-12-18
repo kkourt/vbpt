@@ -120,8 +120,8 @@ vbpt_txt_try_commit(vbpt_txtree_t *txt, vbpt_mtree_t *mt,
 	vbpt_tree_dealloc(tx_tree);
 end:
 	free(txt);
-	VBPT_STOP_TIMER(txt_try_commit);
 	vbpt_txt_update_stats(ret);
+	VBPT_STOP_TIMER(txt_try_commit);
 	return ret;
 }
 

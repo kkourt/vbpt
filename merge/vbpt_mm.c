@@ -58,6 +58,7 @@ vbpt_cache_prealloc(void)
 static vbpt_node_t *
 vbpt_cache_get_node(size_t node_size)
 {
+	VBPT_START_TIMER(vbpt_cache_get_node);
 	assert(node_size == VBPT_NODE_SIZE); // only one size for now
 	vbpt_node_t *node;
 	if (vbptCache.mm_nodes_nr == 0) {
@@ -78,6 +79,7 @@ vbpt_cache_get_node(size_t node_size)
 		vbpt_hdr_putref(kvp[i].val);
 	node->items_nr = 0;
 	//memset(node, 0, node_size);
+	VBPT_STOP_TIMER(vbpt_cache_get_node);
 	return node;
 }
 

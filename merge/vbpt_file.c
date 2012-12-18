@@ -111,9 +111,7 @@ vbpt_file_pwrite(vbpt_tree_t *tree, off_t offset, const void *buff, size_t len)
 			if (dst_off + src_len > leaf->d_len)
 				leaf->d_len = dst_off + src_len;
 		} else {
-			VBPT_START_TIMER(xt1);
 			vbpt_leaf_t *new = vbpt_leaf_alloc(VBPT_LEAF_SIZE, ver);
-			VBPT_STOP_TIMER(xt1);
 			cow_leaf_write(new, old, dst_off, src, src_len);
 			vbpt_leaf_t *l;
 			vbpt_logtree_insert(tree, key, new, &l);
