@@ -645,12 +645,17 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 		p_hdr = vbpt_cur_hdr(pc);
 	}
 
+	#if 0
+	// XXX: I think the tests below are not needed since we are replacing
+	// the same range and the key won't change
+	//
 	// in the following cases, the rightmost value will change, and we would
 	// need to update the parent chain. For now we just bail out
 	if ( p_hdr && p_pslot == p_pnode->items_nr -1 && pc->path.height != 0)
 		return false;
 	if (!p_hdr && p_pslot == p_pnode->items_nr    && pc->path.height != 0)
 		return false;
+	#endif
 
 	assert(g_hdr != p_hdr);
 	vbpt_hdr_t *new_hdr = vbpt_hdr_getref(g_hdr);
