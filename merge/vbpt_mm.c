@@ -36,6 +36,7 @@ vbpt_mm_stats_get(vbpt_mm_stats_t *stats)
 static void
 vbpt_cache_prealloc(void)
 {
+	#if 0
 	const uint64_t prealloc_nodes = 32*1024;
 	const uint64_t prealloc_leafs = 32*1024;
 	for (uint64_t i=0; i<prealloc_nodes; i++) {
@@ -53,6 +54,7 @@ vbpt_cache_prealloc(void)
 		vbptCache.mm_leafs = leaf;
 		vbptCache.mm_leafs_nr++;
 	}
+	#endif
 }
 
 static vbpt_node_t *

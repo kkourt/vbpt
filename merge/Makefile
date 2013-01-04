@@ -12,6 +12,7 @@ hdrs=$(wildcard *.h)
 vbpt_objs  = vbpt_merge.o vbpt.o ver.o phash.o mt_lib.o vbpt_mm.o
 vbpt_tests = vbpt-test vbpt_merge_test ver_test vbpt_file_test
 fbenches   = fbench-nofiles fbench-sepfiles fbench-samefile fbench-vbpt
+tbenches   = tbench-vbpt
 
 
 ifeq  (0,1)
@@ -30,7 +31,7 @@ vbpt_objs  += $(vbpt_log)
 # XXX: Does not seem to be working correctly
 #CFLAGS    += -pg
 
-all:  $(vbpt_tests) $(fbenches)
+all:  $(vbpt_tests) $(fbenches) $(tbenches)
 
 vbpt-test.o: vbpt.c $(hdrs)
 	$(CC) $(CFLAGS) -DVBPT_TEST $< -c -o $@
@@ -64,6 +65,9 @@ fbench-nofiles.o: fbench.c $(hdrs)
 
 fbench-vbpt.o: fbench.c $(hdrs)
 	$(CC) $(CFLAGS) -DVBPT_FILE $< -lpthread -c -o $@
+
+tbench-vbpt.o: tbench.c $(hdrs)
+	$(CC) $(CFLAGS) $< -lpthread -c -o $@
 
 %: %.o $(vbpt_objs) vbpt_file.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
