@@ -64,7 +64,7 @@ vbpt_cache_get_node(size_t node_size)
 	if (vbptCache.mm_nodes_nr == 0) {
 		node = xmalloc(node_size);
 		vbptCache.mm_stats.nodes_allocated++;
-		return node;
+		goto end;
 	}
 	// pop a node
 	node = vbptCache.mm_nodes;
@@ -87,6 +87,7 @@ vbpt_cache_get_node(size_t node_size)
 		} else assert(false);
 	}
 	node->items_nr = 0;
+end:
 	//memset(node, 0, node_size);
 	VBPT_STOP_TIMER(vbpt_cache_get_node);
 	return node;
@@ -95,15 +96,17 @@ vbpt_cache_get_node(size_t node_size)
 static vbpt_leaf_t *
 vbpt_cache_get_leaf(size_t leaf_size)
 {
-	assert(leaf_size = VBPT_LEAF_SIZE);
 	vbpt_leaf_t *leaf;
 	if (vbptCache.mm_leafs_nr == 0) {
 		leaf = xmalloc(sizeof(*leaf));
-		leaf->data = xmalloc(leaf_size);
+		if (leaf_size > 0)
+			leaf->data = xmalloc(leaf_size);
 		vbptCache.mm_stats.leafs_allocated++;
 		return leaf;
 	}
 	leaf = vbptCache.mm_leafs;
+	// we have a single mm queue, so we expect a single size
+	assert(leaf->d_total_len == leaf_size);
 	vbptCache.mm_leafs = leaf->mm_next;
 	vbptCache.mm_leafs_nr--;
 	return leaf;

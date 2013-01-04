@@ -69,7 +69,10 @@ struct vbpt_leaf {
 	struct vbpt_hdr l_hdr;
 	size_t d_len, d_total_len;
 	struct vbpt_leaf   *mm_next; // for mem queues
-	char *data;
+	union {
+		char *data;
+		uint64_t val;
+	};
 } CACHE_ALIGNED;
 typedef struct vbpt_leaf vbpt_leaf_t;
 

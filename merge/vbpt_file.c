@@ -53,6 +53,8 @@ vbpt_file_pread(vbpt_tree_t *tree, off_t offset, void *buff, size_t len)
 }
 
 
+// @new is COW from @old where @src, @src_len data are copied starting at
+// @dst_off. Set new->data accordingly.
 static void
 cow_leaf_write(vbpt_leaf_t *new, const vbpt_leaf_t *old,
                size_t dst_off, const void *src, size_t src_len)

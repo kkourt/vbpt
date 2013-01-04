@@ -8,9 +8,9 @@
 #include <inttypes.h>
 
 struct tsc {
-	uint64_t	ticks;
-	uint64_t	last;
-	uint64_t        cnt;
+	uint64_t ticks;
+	uint64_t last;
+	uint64_t cnt;
 };
 typedef struct tsc tsc_t;
 
@@ -141,13 +141,55 @@ static inline void tsc_spinticks(uint64_t ticks)
 	//printf("spins=%lu\n", spins);
 }
 
-static inline void tsc_report(tsc_t *tsc)
+static inline char *
+tsc_ul_hstr(unsigned long ul)
+{
+	#define UL_HSTR_NR 16
+	static __thread int i=0;
+	static __thread char buffs[UL_HSTR_NR][16];
+	char *b = buffs[i++ % UL_HSTR_NR];
+	#undef UL_HSTR_NR
+
+	char *m;
+	double t;
+	if (ul < 1000) {
+		m = " ";
+		t = (double)ul;
+	} else if (ul < 1000*1000) {
+		m = "K";
+		t = (double)ul/(1000.0);
+	} else if (ul < 1000*1000*1000) {
+		m = "M";
+		t = (double)ul/(1000.0*1000.0);
+	} else {
+		m = "G";
+		t = (double)ul/(1000.0*1000.0*1000.0);
+	}
+
+	snprintf(b, 16, "%5.1lf%s", t, m);
+	return b;
+
+}
+
+static inline void tsc_report_ticks(char *prefix, uint64_t ticks)
+{
+	printf("%-20s %s ticks [%13lu]\n", prefix, tsc_ul_hstr(ticks), ticks);
+}
+
+static inline void tsc_report(char *prefix, tsc_t *tsc)
 {
 	uint64_t ticks = tsc_getticks(tsc);
-
-	printf("ticks : %llu\n", (long long unsigned)ticks);
-	printf("time  : %lf (sec)\n", __tsc_getsecs(ticks));
+	tsc_report_ticks(prefix, ticks);
 }
+
+#define TSC_MEASURE(tsc_, code_)               \
+tsc_t tsc_  = ({                               \
+	tsc_t xtsc_;                               \
+	tsc_init(&xtsc_); tsc_start(&xtsc_);       \
+	do { code_ } while (0);                    \
+	tsc_pause(&xtsc_);                         \
+	xtsc_;                                     \
+});
 
 #define TSC_MEASURE_TICKS(_ticks, _code)       \
 uint64_t _ticks = ({                           \

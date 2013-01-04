@@ -4,8 +4,8 @@
 
 /**
  * Note: most operations are on nodes which are on the last level of the path.
- * That way, we know exactly which the next node should be based on the slot
- * and we can maintain a correct path.
+ * That way, we know exactly which slot the next node should be based on and we
+ * can maintain a correct path.
  */
 
 /**
@@ -460,7 +460,6 @@ update_highkey(vbpt_node_t *node, uint16_t parent_slot,
 {
 	assert(path->nodes[lvl]->kvp[parent_slot].val == &node->n_hdr);
 
-	printf("R U FUCKING KIDDING ME?\n");
 	uint64_t high_k = node->kvp[node->items_nr - 1].key;
 	while (true) {
 		vbpt_node_t *parent = path->nodes[lvl];
@@ -1649,7 +1648,7 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 		double p__ = t__ / (double)total_ticks; \
 		if (p__ < -0.01) \
 			break; \
-		printf("%s" "%24s" ": %6.1lfM (%4.1lf%%) cnt:%9lu (avg:%7.2lfK)\n", \
+		printf("%s" "%24s" ": %8.1lfM (%6.1lf%%) cnt:%9lu (avg:%7.2lfK)\n", \
 		        prefix, "" #x__, t__/(1000*1000.0), p__*100, c__, t__/(1000.0*c__)); \
 	} while (0)
 

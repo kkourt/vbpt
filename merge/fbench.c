@@ -107,10 +107,12 @@ vm_drop_caches(int i)
 		case DROP_METADATA:
 		case DROP_ALL:
 		fprintf(f, "%d\n", i);
+		fclose(f);
 		break;
 
 		default:
 		fprintf(stderr, "%s: invalid argument: %d\n", __FUNCTION__, i);
+		fclose(f);
 		exit(1);
 	}
 }
