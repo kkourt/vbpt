@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include "vbpt.h" /* vbpt_leaf_t */
+#include "vbpt_stats.h"
 
 #include "vbpt_merge.h" // vbpt_range_t
 

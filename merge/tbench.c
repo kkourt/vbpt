@@ -38,6 +38,8 @@ struct targ {
 	size_t            ntxs;    // number of transactions
 	size_t            tx_nops; // operations per transaction
 
+	tsc_t             ticks;
+
 	// vbpt-specific
 	vbpt_mtree_t      *mtree;
 	vbpt_stats_t      vbpt_stats;
@@ -127,8 +129,10 @@ vbpt_thread(void *arg)
 
 	vbpt_stats_init();
 	vbpt_mm_init();
+	tsc_init(&targ->ticks);
 	pthread_barrier_wait(targ->tbar);
 
+	tsc_start(&targ->ticks);
 	for (size_t tx=0; tx < ntxs; tx++) {
 		do {
 			seed = targ->seed; // take a snapshot of seed
@@ -145,6 +149,7 @@ vbpt_thread(void *arg)
 			targ->seed = seed; // failed to commit: restore seed
 		} while (1);
 	}
+	tsc_pause(&targ->ticks);
 
 	pthread_barrier_wait(targ->tbar);
 
@@ -156,20 +161,13 @@ vbpt_thread(void *arg)
 
 
 static void __attribute__((unused))
-vbpt_thr_print_stats(struct targ *arg, tsc_t *ticks)
+vbpt_thr_print_stats(struct targ *arg)
 {
-	tsc_report("", ticks);
+	tsc_report("", &arg->ticks);
 	printf("  VBPT Stats:\n");
-	vbpt_stats_do_report("  ", &arg->vbpt_stats, tsc_getticks(ticks));
-
+	vbpt_stats_do_report("  ", &arg->vbpt_stats, tsc_getticks(&arg->ticks));
 	//vbpt_mm_stats_report("  ", &arg->vbpt_mm_stats);
-	#if 0
-	uint64_t merge_ticks = arg->merge_stats.merge_ticks;
-	printf("\tmerge ticks: %.1lf M [merge/total:%lf]\n",
-	          merge_ticks/(1000*1000.0),
-	          (double)merge_ticks/(double)arg->ticks);
-	vbpt_merge_stats_do_report("\t", &arg->merge_stats);
-	#endif
+	//vbpt_merge_stats_do_report("\t", &arg->vbpt_stats.m);
 }
 
 // insert a key to populate the ->root pointer
@@ -204,10 +202,12 @@ do_run(char *prefix,
 	}
 
 	tsc_report(prefix, &ticks);
+	printf("---------------------------------------------------------\n");
 	for (unsigned i=0; i<nthreads; i++) {
 		printf("T: %2u [tid:%d] ", i, targs[i].tid);
-		vbpt_thr_print_stats(targs+i, &ticks);
+		vbpt_thr_print_stats(targs+i);
 	}
+	printf("---------------------------------------------------------\n\n");
 }
 
 int

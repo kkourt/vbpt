@@ -2,25 +2,38 @@
 
 include scripts/utils.mk
 
+USE_TCMALLOC  = 1
+
 CC      = gcc
 CFLAGS  = -Wall -O2 -g -D_GNU_SOURCE -I. -std=c99 #-fprofile-arcs -ftest-coverage
 CFLAGS += -DNDEBUG
 #CFLAGS += -Wconversion
 #CFLAGS += $(EXTRA_WARNINGS)
-LIBS=-lpthread
+LIBS    = -lpthread
 hdrs=$(wildcard *.h)
-vbpt_objs  = vbpt_merge.o vbpt.o ver.o phash.o mt_lib.o vbpt_mm.o
+vbpt_objs  = vbpt_merge.o vbpt.o ver.o phash.o mt_lib.o vbpt_mm.o vbpt_stats.o
 vbpt_tests = vbpt-test vbpt_merge_test ver_test vbpt_file_test
 fbenches   = fbench-nofiles fbench-sepfiles fbench-samefile fbench-vbpt
 tbenches   = tbench-vbpt
 
+ifeq (1,$(USE_TCMALLOC))
+	CFLAGS    += -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free
+	LDFLAGS   += -ltcmalloc 
+	# check for custom installation of gperftools
+	GPERFDIR   = /home/netos/tools/akourtis/gperftools/install
+	ifeq ($(strip $(wildcard $(GPERFDIR))),$(GPERFDIR))
+		LDFLAGS += -L$(GPERFDIR)/lib -Xlinker -rpath=$(GPERFDIR)/lib
+	endif
+endif
 
-ifeq  (0,1)
-	CFLAGS    += -DVBPT_LOG_PHASH
-	vbpt_log   = vbpt_log.o
+
+
+ifeq  (1,1)
+	CFLAGS   += -DVBPT_LOG_PHASH
+	vbpt_log  = vbpt_log.o
 else
-	CFLAGS    += -DVBPT_LOG_RANGE
-	vbpt_log   = vbpt_log_range.o
+	CFLAGS   += -DVBPT_LOG_RANGE
+	vbpt_log  = vbpt_log_range.o
 endif
 
 
@@ -37,7 +50,7 @@ vbpt-test.o: vbpt.c $(hdrs)
 	$(CC) $(CFLAGS) -DVBPT_TEST $< -c -o $@
 
 vbpt-test: vbpt-test.o ver.o phash.o vbpt_mm.o $(vbpt_log)
-	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
+	$(CC) $(LDFLAGS) $^ -o $@ $(LIBS)
 
 vbpt_file.o: vbpt_file.c $(hdrs)
 	$(CC) $(CFLAGS) $< -c -o $@
@@ -46,13 +59,13 @@ vbpt_file_test.o: vbpt_file.c $(hdrs)
 	$(CC) $(CFLAGS) -DVBPT_FILE_TEST $< -c -o $@
 
 vbpt_file_test: vbpt_file_test.o $(vbpt_objs)
-	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
+	$(CC) $(LDFLAGS) $^ -o $@ $(LIBS)
 
 vbpt_merge_test: vbpt_merge_test.o $(vbpt_objs)
-	$(CC) $(CFLAGS) -DVBPT_MERGE_TEST $^ -o $@ $(LIBS)
+	$(CC) $(LDFLAGS) $^ -o $@ $(LIBS)
 
 ver_test: ver_test.c ver.c $(hdrs)
-	$(CC) $(CFLAGS) ver_test.c ver.c -o ver_test $(LIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) ver_test.c ver.c -o ver_test $(LIBS)
 
 fbench-samefile.o: fbench.c $(hdrs)
 	$(CC) $(CFLAGS) -DSAME_FILE $< -lpthread -c -o $@
@@ -70,7 +83,7 @@ tbench-vbpt.o: tbench.c $(hdrs)
 	$(CC) $(CFLAGS) $< -lpthread -c -o $@
 
 %: %.o $(vbpt_objs) vbpt_file.o
-	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
+	$(CC) $(LDFLAGS) $^ -o $@ $(LIBS)
 
 %.o: %.c $(hdrs)
 	$(CC) $(CFLAGS) $< -c -o $@

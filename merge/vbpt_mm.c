@@ -2,6 +2,7 @@
 #include "refcnt.h"
 #include "vbpt.h"
 #include "vbpt_mm.h"
+#include "vbpt_stats.h"
 
 /*
  * initialize a header

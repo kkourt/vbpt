@@ -894,7 +894,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		    !vbpt_log_rs_key_exists(plog, range->key, p_dist))
 			return 1;
 
-		printf("gc is null, I ran out of options\n");
+		//printf("gc is null, I ran out of options\n");
 		return -1;
 	}
 

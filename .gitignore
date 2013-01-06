@@ -6,6 +6,7 @@ vbpt_file_test
 perf.data*
 ver_test
 fbench-*
+tbench-*
 core
 cscope.out
 gmon.out
