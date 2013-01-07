@@ -7,10 +7,16 @@
 
 #include <inttypes.h>
 
+//#define TSC_MINMAX
+
 struct tsc {
 	uint64_t ticks;
 	uint64_t last;
 	uint64_t cnt;
+	#if defined(TSC_MINMAX)
+	uint64_t min;
+	uint64_t max;
+	#endif
 };
 typedef struct tsc tsc_t;
 
@@ -58,6 +64,10 @@ static inline void tsc_init(tsc_t *tsc)
 	tsc->ticks = 0;
 	tsc->last  = 0;
 	tsc->cnt   = 0;
+	#if defined(TSC_MINMAX)
+	tsc->min   = UINT64_MAX;
+	tsc->max   = 0;
+	#endif
 }
 
 static inline void tsc_shut(tsc_t *tsc)
@@ -73,11 +83,22 @@ static inline void tsc_start(tsc_t *tsc)
 
 static inline void tsc_pause(tsc_t *tsc)
 {
+	uint64_t ticks;
 	uint64_t t = get_ticks();
 	assert(tsc->last < t);
 	assert(tsc->cnt % 2 == 1);
-	tsc->ticks += (t - tsc->last);
+	ticks = t - tsc->last;
+	tsc->ticks += ticks;
 	tsc->cnt++;
+	#if defined(TSC_MINMAX)
+	if (ticks > tsc->max)
+		tsc->max = ticks;
+	// XXX: there is code that initializes tsc_t by zeroing everything
+	// (i.e., without calling tsc_init())
+	if (ticks < tsc->min || tsc->min == 0) {
+		tsc->min = ticks;
+	}
+	#endif
 }
 
 static double __getMhz(void)
@@ -126,6 +147,32 @@ static inline double tsc_getsecs(tsc_t *tsc)
 static uint64_t tsc_getticks(tsc_t *tsc)
 {
 	return tsc->ticks;
+}
+
+static inline double
+tsc_getticks_avg(tsc_t *tsc)
+{
+	return (double)tsc_getticks(tsc) / (double)tsc->cnt;
+}
+
+static inline double
+tsc_getticks_max(tsc_t *tsc)
+{
+	#if defined(TSC_MINMAX)
+	return (double)tsc->max;
+	#else
+	return tsc_getticks_avg(tsc);
+	#endif
+}
+
+static inline double
+tsc_getticks_min(tsc_t *tsc)
+{
+	#if defined(TSC_MINMAX)
+	return (double)tsc->min;
+	#else
+	return tsc_getticks_avg(tsc);
+	#endif
 }
 
 static inline void tsc_spinticks(uint64_t ticks)

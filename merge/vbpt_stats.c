@@ -48,10 +48,17 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 		uint64_t t__ = tsc_getticks(&st->x__);  \
 		uint64_t c__ = st->x__.cnt;             \
 		double p__ = t__ / (double)total_ticks; \
-		if (p__ <-0.1) \
+		if (p__ <-0.1 || c__ == 0) \
 			break; \
-		printf("%s" "%24s" ": %8.1lfM (%6.1lf%%) cnt:%9lu (avg:%7.2lfK)\n", \
-		        prefix, "" #x__, t__/(1000*1000.0), p__*100, c__, t__/(1000.0*c__)); \
+		printf("%s %24s: " \
+		       "%8.1lfM (%6.1lf%%) "  \
+		       "cnt:%9lu (avg:%7.2lfK min:%7.2lfK max:%7.2lfK)\n", \
+		        prefix, "" #x__, \
+		        t__/(1000*1000.0), p__*100, \
+		        c__, \
+		        tsc_getticks_avg(&st->x__) / 1000.0,  \
+		        tsc_getticks_min(&st->x__) / 1000.0,  \
+		        tsc_getticks_max(&st->x__) / 1000.0); \
 	} while (0)
 
 	#define pr_cnt(x__) \
