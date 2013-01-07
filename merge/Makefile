@@ -18,11 +18,12 @@ tbenches   = tbench-vbpt
 
 ifeq (1,$(USE_TCMALLOC))
 	CFLAGS    += -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free
-	LDFLAGS   += -ltcmalloc 
 	# check for custom installation of gperftools
 	GPERFDIR   = /home/netos/tools/akourtis/gperftools/install
 	ifeq ($(strip $(wildcard $(GPERFDIR))),$(GPERFDIR))
 		LDFLAGS += -L$(GPERFDIR)/lib -Xlinker -rpath=$(GPERFDIR)/lib
+	else
+		LDFLAGS   += -ltcmalloc
 	endif
 endif
 
