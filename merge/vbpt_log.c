@@ -174,8 +174,9 @@ bool
 vbpt_log_rs_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth)
 {
 	for (unsigned i=0; i<depth; i++) {
-		if (pset_range_exists(&log->rd_set, r->key, r->len))
+		if (pset_range_exists(&log->rd_set, r->key, r->len)) {
 			return true;
+		}
 		log = vbpt_log_parent(log);
 		assert(log != NULL);
 	}

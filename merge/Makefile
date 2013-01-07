@@ -29,7 +29,7 @@ endif
 
 
 
-ifeq  (1,1)
+ifeq  (1,0)
 	CFLAGS   += -DVBPT_LOG_PHASH
 	vbpt_log  = vbpt_log.o
 else

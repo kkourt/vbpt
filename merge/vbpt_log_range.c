@@ -11,6 +11,13 @@
 #error ""
 #endif
 
+/**
+ * NB: We are using vbpt_range for maintaining log sets. vbpt_range.h cod
+ * assumes non-empty ranges, but here a log set described by a range with ->len
+ * = 0 is considered empty. Hence we have to check if a log is empty before
+ * passing it to a vbpt_range function.
+ */
+
 void
 vbpt_log_init(vbpt_log_t *log)
 {
@@ -94,11 +101,27 @@ vbpt_log_delete(vbpt_log_t *log, uint64_t key)
  * perform queries on logs
  */
 
+static bool
+vbpt_log_range_contains(const vbpt_range_t *r1, uint64_t key)
+{
+	if (r1->len == 0)
+		return false;
+	return vbpt_range_contains(r1, key);
+}
+
+static inline bool
+vbpt_log_range_intersects(const vbpt_range_t *r1, const vbpt_range_t *r2)
+{
+	if (r1->len == 0 || r2->len == 0)
+		return false;
+	return vbpt_range_intersects(r1, r2);
+}
+
 bool
 vbpt_log_ws_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth)
 {
 	for (unsigned i=0; i<depth; i++) {
-		if (vbpt_range_contains(&log->wr_range, key))
+		if (vbpt_log_range_contains(&log->wr_range, key))
 			return true;
 		log = vbpt_log_parent(log);
 		assert(log != NULL);
@@ -112,7 +135,7 @@ bool
 vbpt_log_rs_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth)
 {
 	for (unsigned i=0; i<depth; i++) {
-		if (vbpt_range_contains(&log->rd_range, key))
+		if (vbpt_log_range_contains(&log->rd_range, key))
 			return true;
 		log = vbpt_log_parent(log);
 		assert(log != NULL);
@@ -124,7 +147,7 @@ bool
 vbpt_log_rs_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth)
 {
 	for (unsigned i=0; i<depth; i++) {
-		if (vbpt_range_intersects(&log->rd_range, r))
+		if (vbpt_log_range_intersects(&log->rd_range, r))
 			return true;
 		log = vbpt_log_parent(log);
 		assert(log != NULL);
@@ -137,7 +160,7 @@ bool
 vbpt_log_ds_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth)
 {
 	for (unsigned i=0; i<depth; i++) {
-		if (vbpt_range_contains(&log->rm_range, key))
+		if (vbpt_log_range_contains(&log->rm_range, key))
 			return true;
 		log = vbpt_log_parent(log);
 		assert(log != NULL);
@@ -149,7 +172,7 @@ bool
 vbpt_log_ds_range_exists(vbpt_log_t *log, vbpt_range_t *r, unsigned depth)
 {
 	for (unsigned i=0; i<depth; i++) {
-		if (vbpt_range_intersects(&log->rm_range, r))
+		if (vbpt_log_range_intersects(&log->rm_range, r))
 			return true;
 		log = vbpt_log_parent(log);
 		assert(log != NULL);

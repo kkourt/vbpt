@@ -32,8 +32,8 @@ void vbpt_log_dealloc(vbpt_log_t *log); // deallocate a log (pairs with _alloc)
 // query the log:
 //  to allow for different implementations for the logs, we specify that query
 //  functions can return false positives (e.g., so that they can be implemented
-//  with bloom filters) but not false negatives. In that sense, a check function
-//  that always returns true is correct.
+//  with bloom filters) but not false negatives. Hence, a check function that
+//  always returns true is correct.
 
 // read set (rs) checks
 bool vbpt_log_rs_key_exists(vbpt_log_t *log, uint64_t key, unsigned depth);
