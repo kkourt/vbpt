@@ -70,7 +70,7 @@
 
 #define DIV_ROUNDUP(n,d) (((n) + (d) - 1) / (d))
 
-#define dbg_print_str__ "%4d>>>>> %s() [%s +%d]"
+#define dbg_print_str__ "%4ld>>>>> %s() [%s +%d]"
 #define dbg_print_arg__ gettid(), __FUNCTION__, __FILE__, __LINE__
 #define dbg_print(msg ,fmt, args...)\
     printf(dbg_print_str__ " " msg "\033[31m" fmt "\033[0m" , dbg_print_arg__ , ##args)

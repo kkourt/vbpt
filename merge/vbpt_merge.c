@@ -794,7 +794,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	 */
 	if (!ver_ancestor_limit(gc_v, gv, g_dist - 1)) {
 		#if defined(XDEBUG_MERGE)
-		printf("NO CHANGES in gc_v\n");
+		dmsg("NO CHANGES in gc_v\n");
 		#endif
 		VBPT_MERGE_INC_COUNTER(gc_old);
 		return 1;
@@ -811,7 +811,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	 */
 	if (!ver_ancestor_limit(pc_v, pv, p_dist - 1)) {
 		#if defined(XDEBUG_MERGE)
-		printf("Only gc_v changed\n");
+		dmsg("Only gc_v changed\n");
 		#endif
 		VBPT_MERGE_INC_COUNTER(pc_old);
 		// check if private tree read something that is under the
@@ -835,11 +835,11 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	 *        (gv)
 	 */
 	 #if defined(XDEBUG_MERGE)
-	 printf("Both changed\n");
-	 //printf("base: %s\n", ver_str(jv));
-	 printf("pc:"); vbpt_cur_print(pc);
-	 printf("gc:"); vbpt_cur_print(gc);
-	 printf("\n");
+	 dmsg("Both changed\n");
+	 //dmsg("base: %s\n", ver_str(jv));
+	 dmsg("pc:"); vbpt_cur_print(pc);
+	 dmsg("gc:"); vbpt_cur_print(gc);
+	 dmsg("\n");
 	 #endif
 
 	// Handle NULL cases: NULL cases are special because we lack information
@@ -849,7 +849,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	if (vbpt_cur_null(pc) && vbpt_cur_null(gc)) {
 		VBPT_MERGE_INC_COUNTER(both_null);
 		#if defined(XDEBUG_MERGE)
-		printf("Both are NULL\n");
+		dmsg("Both are NULL\n");
 		#endif
 		// if both cursors point to NULL, there is a conflict if @gv has
 		// read an item from the previous state, which may not have been
@@ -860,7 +860,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	} else if (vbpt_cur_null(pc)) {
 		VBPT_MERGE_INC_COUNTER(pc_null);
 		#if defined(XDEBUG_MERGE)
-		printf("pc is NULL\n");
+		dmsg("pc is NULL\n");
 		#endif
 		// @pc points to NULL, but @gc does not. If @pv did not read or
 		// delete anything in that range, we can replace @pc with @gc.
@@ -873,7 +873,7 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	} else if (vbpt_cur_null(gc)) {
 		VBPT_MERGE_INC_COUNTER(gc_null);
 		#if defined(XDEBUG_MERGE)
-		printf("gc is NULL\n");
+		dmsg("gc is NULL\n");
 		#endif
 		// @gc points  to NULL, but @pc does not. We can't just check
 		// against the readset of @plog and keep the NULL: If @gc
@@ -983,8 +983,8 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 		goto end;
 	}
 	#if defined(XDEBUG_MERGE)
-	printf("VERSIONS: gver:%s  pver:%s  vj:%s g_dist:%d p_dist:%d\n",
-	        ver_str(gver), ver_str(pver), ver_str(vj), g_dist, p_dist);
+	dmsg("VERSIONS: gver:%s  pver:%s  vj:%s g_dist:%d p_dist:%d\n",
+	      ver_str(gver), ver_str(pver), ver_str(vj), g_dist, p_dist);
 	#endif
 
 	while (!(vbpt_cur_end(&gc) && vbpt_cur_end(&pc))) {

@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "vbpt.h"
+#include "vbpt_stats.h"
 #include "misc.h"
 
 /*  mutable tree objects on top of immutable versioned trees */
@@ -107,12 +108,11 @@ vbpt_mtree_try_commit(vbpt_mtree_t *mtree, vbpt_tree_t *tree,
 	spin_unlock(&mtree->mt_lock);
 
 	// pin without holding the lock
-	if (committed)
-		ver_pin(mtree->mt_tree->ver, mt_tree->ver);
-
-
 	if (committed) {
+		ver_pin(mtree->mt_tree->ver, mt_tree->ver);
+		VBPT_START_TIMER(mtree_try_commit);
 		vbpt_tree_dealloc(mt_tree);
+		VBPT_STOP_TIMER(mtree_try_commit);
 	}
 
 	return committed;

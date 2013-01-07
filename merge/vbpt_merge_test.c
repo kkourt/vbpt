@@ -253,6 +253,7 @@ struct merge_thr_stats {
 	uint64_t           insert_ticks;
 	uint64_t           finalize_ticks;
 	uint64_t           commit_ticks;
+	struct vbpt_stats  vbpt_stats;
 };
 
 struct merge_thr_arg {
@@ -262,9 +263,9 @@ struct merge_thr_arg {
 	unsigned                loops;
 	unsigned                id;
 	unsigned                cpu;
-	struct merge_thr_stats  stats;
 	uint64_t                ticks;
 	spinlock_t              *lock;
+	struct merge_thr_stats  stats;
 };
 
 static void
@@ -272,9 +273,10 @@ merge_thr_print_stats(struct merge_thr_arg *arg)
 {
 	#define pr_ticks(x__) do { \
 		double p__ = (double)s->x__ / (double)arg->ticks; \
+		char  *s__ = tsc_ul_hstr(s->x__); \
 		if (p__ < 0.1) \
 			break; \
-		printf("\t" # x__ ": %lu (%.1lf%%)\n", s->x__, p__*100); \
+		printf("\t" # x__ ": %s (%.1lf%%)\n", s__, p__*100); \
 	} while (0)
 
 	struct merge_thr_stats *s = &arg->stats;
@@ -328,6 +330,7 @@ merge_test_thr(void *arg_)
 	unsigned seed = arg->wl->seed;
 	arg->stats = (struct merge_thr_stats){0};
 	vbpt_mm_init();
+	vbpt_stats_init();
 	setaffinity_oncpu(arg->cpu);
 	arg->stats.tid = gettid();
 
@@ -379,6 +382,7 @@ merge_test_thr(void *arg_)
 	arg->ticks = tsc_getticks(&tsc);
 	pthread_barrier_wait(arg->barrier);
 	vbpt_mm_stats_get(&arg->stats.mm_stats);
+	vbpt_stats_get(&arg->stats.vbpt_stats);
 	return NULL;
 }
 
@@ -397,7 +401,7 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 	if (pthread_barrier_init(&barrier, NULL, nthreads+1) != 0)
 		assert(false && "failed to initialize barrier");
 
-	const uint64_t loops = 1024;
+	const uint64_t loops = 16*1024;
 	uint64_t total_ops = 0;
 	spinlock_init(&lock);
 	for (unsigned i=0; i<nthreads; i++) {
@@ -423,11 +427,15 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 	}
 
 	vbpt_mtree_dealloc(mtree, NULL);
-	printf("total_ticks: %.1lfk ticks/op:%lu loops:%lu\n",
-	        (double)thr_ticks/1000.0, thr_ticks/(loops*total_ops), loops);
+	printf("nthreads:%u, ticks/op:%-8s total_ticks:%5s, loops:%lu\n",
+	        nthreads,
+	        tsc_ul_hstr(thr_ticks/(loops*total_ops)),
+	        tsc_ul_hstr(thr_ticks),
+	        loops);
 	for (unsigned i=0; i<nthreads; i++) {
 		printf("T: %2u [tid:%lu] ", i, args[i].stats.tid);
 		merge_thr_print_stats(args+i);
+		vbpt_stats_do_report(" ", &args[i].stats.vbpt_stats, thr_ticks);
 	}
 }
 
@@ -462,14 +470,20 @@ test_mt_rand(unsigned nr_threads, unsigned *cpus)
 	 *   d:       thread-specific data
 	 *   d0_len:  key range (max key)
 	 *   d0_nr:   number of initial keys
-	 *   d_nr:    number of keys for each thread
+	 *   d_nr:    number of keys for transaction
 	 *   d_len:   key range for each thread
 	 */
 	const unsigned long d0_len = 32768;
-	const unsigned long d0_nr  = (d0_len>>3); // /128
-	const unsigned long d_nr   = 16;
+	const unsigned long d0_nr  = (d0_len); // /128
+	const unsigned long d_nr   = 64;
 	const unsigned long d_len  = 128;
-	struct dist_desc d0 = { .r_start= 0, .r_len = d0_len, .nr = d0_nr, .seed = 1};
+
+	struct dist_desc d0 = {
+		.r_start = 0,
+		.r_len   = d0_len,
+		.nr      = d0_nr,
+		.seed    = 1
+	};
 	struct dist_desc dt[nr_threads];
 
 	const unsigned long part_len = d0_len / nr_threads;

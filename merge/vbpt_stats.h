@@ -6,8 +6,11 @@
 #include "tsc.h"
 typedef struct vbpt_stats vbpt_stats_t;
 
-void vbpt_stats_report(uint64_t total_ticks);
-void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks);
+static inline void vbpt_stats_init(void);
+static inline void vbpt_stats_get(vbpt_stats_t *stats);
+void               vbpt_stats_report(uint64_t total_ticks);
+void               vbpt_stats_do_report(char *prefix,
+                                        vbpt_stats_t *st, uint64_t total_ticks);
 
 extern __thread vbpt_stats_t VbptStats;
 
@@ -43,6 +46,7 @@ struct vbpt_stats {
 	#if defined(VBPT_STATS)
 	tsc_t                    vbpt_search;
 	tsc_t                    txt_try_commit;
+	tsc_t                    mtree_try_commit;
 	tsc_t                    logtree_insert;
 	tsc_t                    logtree_get;
 	tsc_t                    txtree_alloc;

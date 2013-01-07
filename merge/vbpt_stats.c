@@ -60,6 +60,7 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 	#if defined(VBPT_STATS)
 	pr_ticks(vbpt_app);
 	pr_ticks(txt_try_commit);
+	pr_ticks(mtree_try_commit);
 	pr_ticks(txtree_alloc);
 	pr_ticks(file_pread);
 	pr_ticks(file_pwrite);

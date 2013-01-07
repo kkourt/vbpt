@@ -9,7 +9,7 @@
 #include "misc.h"
 
 // Versions form a tree (partial order) as defined by the ->parent pointer.
-// This partial order is queried when performing a merge operations.
+// This partial order is queried when performing merge operations.
 
 // We use a ->parent pointer to track the partial order to enable for
 // concurrency (instead of using children pointers)
@@ -38,10 +38,10 @@
  *      |    \
  *   Vg o     o Vp
  *
- * Since children point to parents, we can't use typical reference counting --
- * reference counts will not reach zero. Instead, we need to collect versions
- * which form a chain that reaches the end (NULL) and all refcounts in the chain
- * are 1.
+ * Since children point to parents, we can't use typical reference counting,
+ * because reference counts will never reach zero. Instead, we need to collect
+ * versions which form a chain that reaches the end (NULL) and all refcounts in
+ * the chain are 1.
  *
  * The above is enabled by the way we query the partial order when doing merges.
  * As an optimization, we only check until the Vj (i.e., we only traverse the
@@ -49,8 +49,8 @@
  * looking for, we assume that it is before Vj (see ver_join() and
  * ver_leq_limit()). So, if no branches exist in a chain that reaches NULL, we
  * know that the nodes in the chain won't be traversed by the partial order
- * queries -- i.e., they can be removed by the tree. We term versions that
- * are not going to be traversed by the partial order queries stale versions.
+ * queries -- i.e., they can be removed by the tree. We term versions that are
+ * not going to be traversed by the partial order queries stale versions.
  *
  * One (i.e., me in several different occasions) might think that this enable us
  * to not count references from nodes.  However, this is not the case. The
@@ -68,7 +68,7 @@
  * Instead, we use two reference counts: one for keeping a version to the
  * version tree (rfcnt_children), and one for reclaiming the version
  * (rfcnt_total). We use rfcnt_children to remove a version from the tree, and
- * rfcnt_total to reclaim the version. Reming versions eagerly from the tree
+ * rfcnt_total to reclaim the version. Removing versions eagerly from the tree
  * avoids having to search long version chains.
  *
  * There are two options on how the two reference counts are kept: (a)
