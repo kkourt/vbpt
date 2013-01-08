@@ -183,6 +183,33 @@ ver_str(ver_t *ver)
 	return buff;
 }
 
+static inline char *
+ver_fullstr(ver_t *ver)
+{
+	#define VERSTR_BUFF_SIZE 128
+	#define VERSTR_BUFFS_NR   16
+	static int i=0;
+	static char buff_arr[VERSTR_BUFFS_NR][VERSTR_BUFF_SIZE];
+	char *buff = buff_arr[i++ % VERSTR_BUFFS_NR];
+	#ifndef NDEBUG
+	snprintf(buff, VERSTR_BUFF_SIZE,
+	         " [%p: ver:%3zd rfcnt_children:%3u rfcnt_total:%3u] ",
+		 ver,
+	         ver->v_id,
+		 refcnt_get(&ver->rfcnt_children),
+		 refcnt_get(&ver->rfcnt_total));
+	#else
+	snprintf(buff, VERSTR_BUFF_SIZE,
+	         " [%12p: rfcnt_children:%3u rfcnt_total:%3u] ",
+		 ver,
+		 refcnt_get(&ver->rfcnt_children),
+		 refcnt_get(&ver->rfcnt_total));
+	#endif
+	return buff;
+	#undef VERSTR_BUFF_SIZE
+	#undef VERSTR_BUFFS_NR
+}
+
 static inline void
 ver_path_print(ver_t *v, FILE *fp)
 {
@@ -259,6 +286,8 @@ ver_create(void)
 	ver_init__(ret);
 	return ret;
 }
+
+void ver_chain_print(ver_t *ver);
 
 /**
  * garbage collect the tree from @ver's parent and above

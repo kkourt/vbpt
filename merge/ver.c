@@ -21,6 +21,16 @@ ver_debug_init(ver_t *ver)
 	#endif
 }
 
+void
+ver_chain_print(ver_t *ver)
+{
+	printf("=== Printing chain ============================== %p\n", ver);
+	while (ver != NULL) {
+		printf(" %s\n", ver_fullstr(ver));
+		ver = ver->parent;
+	}
+	printf("=========================================================\n");
+}
 
 /**
  * see ver_join()
