@@ -260,7 +260,7 @@ struct merge_thr_arg {
 	vbpt_mtree_t            *mtree;
 	struct dist_desc        *wl;
 	pthread_barrier_t       *barrier;
-	unsigned                loops;
+	unsigned                ntxs;
 	unsigned                id;
 	unsigned                cpu;
 	uint64_t                ticks;
@@ -336,7 +336,8 @@ merge_test_thr(void *arg_)
 
 	pthread_barrier_wait(arg->barrier);
 	tsc_t tsc; tsc_init(&tsc); tsc_start(&tsc);
-	for (unsigned i=0; i<arg->loops; i++) {
+	for (unsigned i=0; i<arg->ntxs; i++) {
+		//tsc_spinticks(10000);
 		unsigned fails = 0;
 		while (1) {
 			unsigned old_seed = seed;
@@ -401,7 +402,7 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 	if (pthread_barrier_init(&barrier, NULL, nthreads+1) != 0)
 		assert(false && "failed to initialize barrier");
 
-	const uint64_t loops = 16*1024;
+	const uint64_t ntxs = 16*1024;
 	uint64_t total_ops = 0;
 	spinlock_init(&lock);
 	for (unsigned i=0; i<nthreads; i++) {
@@ -410,7 +411,7 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 		arg->wl      = wls + i;
 		arg->barrier = &barrier;
 		arg->lock    = &lock;
-		arg->loops   = loops;
+		arg->ntxs    = ntxs;
 		arg->id      = i;
 		arg->cpu     = cpus[i];
 		pthread_create(tids+i, NULL, merge_test_thr, arg);
@@ -426,12 +427,14 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 		pthread_join(tids[i], NULL);
 	}
 
+	//tc_malloc_stats();
 	vbpt_mtree_dealloc(mtree, NULL);
-	printf("nthreads:%u, ticks/op:%-8s total_ticks:%5s, loops:%lu\n",
+
+	printf("nthreads:%u, ticks/op:%-8s total_ticks:%5s, ntxs:%lu\n",
 	        nthreads,
-	        tsc_ul_hstr(thr_ticks/(loops*total_ops)),
+	        tsc_ul_hstr(thr_ticks/(ntxs*total_ops)),
 	        tsc_ul_hstr(thr_ticks),
-	        loops);
+	        ntxs);
 	for (unsigned i=0; i<nthreads; i++) {
 		printf("T: %2u [tid:%lu] ", i, args[i].stats.tid);
 		merge_thr_print_stats(args+i);
@@ -474,8 +477,8 @@ test_mt_rand(unsigned nr_threads, unsigned *cpus)
 	 *   d_len:   key range for each thread
 	 */
 	const unsigned long d0_len = 32768;
-	const unsigned long d0_nr  = (d0_len); // /128
-	const unsigned long d_nr   = 64;
+	const unsigned long d0_nr  = (d0_len/128); // /128
+	const unsigned long d_nr   = 32;
 	const unsigned long d_len  = 128;
 
 	struct dist_desc d0 = {
