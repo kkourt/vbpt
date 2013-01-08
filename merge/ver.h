@@ -8,6 +8,8 @@
 #include "container_of.h"
 #include "misc.h"
 
+#include "vbpt_stats.h"
+
 // Versions form a tree (partial order) as defined by the ->parent pointer.
 // This partial order is queried when performing merge operations.
 
@@ -300,18 +302,27 @@ void ver_chain_print(ver_t *ver);
 static void inline
 ver_tree_gc(ver_t *ver)
 {
+	VBPT_START_TIMER(ver_tree_gc);
 	ver_t *ver_p = ver->parent;
+	#if defined(VBPT_STATS)
+	uint64_t count = 0;
+	#endif
 	while (true) {
 		// reached bottom
 		if (ver_p == NULL)
 			break;
-		// try to get a the refcount. If it's not possible somebody else
-		// runs the collector and has the lock, so just bail out.
+
 		uint32_t children;
+		#if 0
+		// try to get a the refcount. If it's not possible somebody else
+		// is using the reference count lock (is that possible?)
 		if (!refcnt_try_get(&ver_p->rfcnt_children, &children)) {
-			assert(false && "This shouldn't happen"); // CHECKME: this has triggered
-			return;
+			VBPT_STOP_TIMER(ver_tree_gc);
+			goto end;
 		}
+		#else
+		children = refcnt_(&ver_p->rfcnt_children);
+		#endif
 		assert(children > 0);
 
 		// found a branch, reset the head of the chain
@@ -319,7 +330,11 @@ ver_tree_gc(ver_t *ver)
 			ver = ver_p;
 
 		ver_p = ver_p->parent;
+		count++;
 	}
+	VBPT_STOP_TIMER(ver_tree_gc);
+	VBPT_XCNT_ADD(ver_tree_gc_iters, count);
+	//tmsg("count=%lu ver->parent=%p\n", count, ver->parent);
 
 	// poison ->parent pointers of stale versions
 	ver_t *v = ver->parent;

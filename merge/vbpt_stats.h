@@ -3,7 +3,11 @@
 
 #define VBPT_STATS // enable stats
 
+#include <strings.h> //bzero
+
 #include "tsc.h"
+#include "xcnt.h"
+
 typedef struct vbpt_stats vbpt_stats_t;
 
 static inline void vbpt_stats_init(void);
@@ -57,6 +61,7 @@ struct vbpt_stats {
 	tsc_t                    vbpt_node_alloc;
 	tsc_t                    vbpt_cache_get_node;
 	tsc_t                    vbpt_app;
+	tsc_t                    ver_tree_gc;
 	uint64_t                 commit_ok;
 	uint64_t                 commit_fail;
 	uint64_t                 commit_merge_ok;
@@ -64,6 +69,7 @@ struct vbpt_stats {
 	uint64_t                 merge_ok;
 	uint64_t                 merge_fail;
 	struct vbpt_merge_stats  m;
+	xcnt_t                   ver_tree_gc_iters;
 	#endif
 };
 
@@ -83,6 +89,11 @@ vbpt_stats_get(vbpt_stats_t *stats)
 #define VBPT_START_TIMER(_x)  \
 	do {                              \
 		tsc_start(&VbptStats._x); \
+	} while (0)
+
+#define VBPT_XCNT_ADD(_x, val) \
+	do { \
+		xcnt_add(&VbptStats._x, val); \
 	} while (0)
 
 #define VBPT_STOP_TIMER(_x)  \
