@@ -92,3 +92,52 @@ vbpt_mtree_try_commit(vbpt_mtree_t *mtree, vbpt_tree_t *tree,
 
 	return committed;
 }
+
+/**
+ * try to commit a new version to @mtree
+ *
+ * @tree:            the new version of the tree
+ * @b_ver:           the version @tree is based on
+ * @mt_tree_old_ptr: old version of the tree is placed in this poinetr
+ *                   (i.e., version before the call)
+ *
+ * if (un)successful true (false) is returned.
+ *
+ * caller should take mtree->mt_lock before calling
+ * if successful, lock is released
+ *
+ * @tree's refcount is not increased
+ */
+bool
+vbpt_mtree_try_commit2(vbpt_mtree_t *mtree,
+                       vbpt_tree_t *tree,
+                       ver_t *b_ver,
+                       vbpt_tree_t **mt_tree_old_ptr)
+{
+	bool committed;
+	ver_t *ver_old;
+
+	VBPT_START_TIMER(mtree_try_commit);
+
+	*mt_tree_old_ptr = mtree->mt_tree;
+	ver_old          = mtree->mt_tree->ver;
+
+	committed = false;
+	if (ver_eq(ver_old, b_ver)) {
+		mtree->mt_tree = tree;
+		// commit aftermath
+		committed = true;
+		spin_unlock(&mtree->mt_lock);
+		// pin new tree version in place of old
+		ver_pin(mtree->mt_tree->ver, ver_old);
+		// try to run gc for versions before the pinned version
+		// if somebody else has the lock, just continue
+		if (spin_try_lock(&mtree->gc_lock)) {
+			ver_tree_gc(mtree->mt_tree->ver);
+			spin_unlock(&mtree->gc_lock);
+		}
+	}
+
+	VBPT_STOP_TIMER(mtree_try_commit);
+	return committed;
+}

@@ -70,6 +70,7 @@ struct vbpt_stats {
 	uint64_t                 merge_fail;
 	struct vbpt_merge_stats  m;
 	xcnt_t                   ver_tree_gc_iters;
+	xcnt_t                   merge_iters;
 	#endif
 };
 

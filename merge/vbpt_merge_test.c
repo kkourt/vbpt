@@ -357,7 +357,8 @@ merge_test_thr(void *arg_)
 			arg->stats.commit_attempts++;
 			vbpt_txt_res_t ret;
 			TSC_ADD_TICKS(arg->stats.commit_ticks, {
-				ret = vbpt_txt_try_commit(txt, mtree, 2);
+				//ret = vbpt_txt_try_commit(txt, mtree, 2);
+				ret = vbpt_txt_try_commit2(txt, mtree);
 			})
 			//tmsg("RET:%s\n", vbpt_txt_res2str[ret]);
 			if (ret == VBPT_COMMIT_FAILED) {

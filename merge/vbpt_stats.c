@@ -65,7 +65,7 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 		printf("%s" "%24s" ": %lu\n", prefix, "" #x__, st->x__)
 
 	#define pr_xcnt(x__) \
-		xcnt_report(prefix, &st->x__)
+		xcnt_report("" #x__, &st->x__)
 
 	#if defined(VBPT_STATS)
 	pr_ticks(vbpt_app);
@@ -105,6 +105,7 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 	pr_cnt(m.gc_null);
 	//pr_cnt(m.join_failed);
 	pr_xcnt(ver_tree_gc_iters);
+	pr_xcnt(merge_iters);
 	#endif
 
 	#undef pr_ticks

@@ -110,7 +110,7 @@ xcnt_u64_hstr(uint64_t ul)
 static inline void
 xcnt_report(const char *prefix, xcnt_t *xcnt)
 {
-	printf("%-20s XCNT total:%7s [%13"PRIu64"]"
+	printf("%25s: XCNT total:%7s [%13"PRIu64"]"
 	                   " cnt:%7s [%13"PRIu64"]"
 	                   " min:%7s [%13"PRIu64"]"
 	                   " max:%7s [%13"PRIu64"]"

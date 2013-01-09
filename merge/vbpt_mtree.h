@@ -50,5 +50,9 @@ bool vbpt_mtree_try_commit(vbpt_mtree_t *mtree,
                            vbpt_tree_t *tree, ver_t *b_ver,
                            vbpt_tree_t *mt_tree_dst);
 
+bool vbpt_mtree_try_commit2(vbpt_mtree_t *mtree,
+                            vbpt_tree_t *tree,
+                            ver_t *b_ver,
+                            vbpt_tree_t **mt_tree_old_ptr);
 
 #endif /* VBPT_MTREE_H */

@@ -85,25 +85,42 @@ vbpt_txt_update_stats(vbpt_txt_res_t ret)
 	}
 }
 
+// There are two, unimaginatively named, functions to commit
+//
+// -vbpt_tx_try_commit (using vbpt_mtree_try_commit):
+//     checks to see if it can commit. If yes, that's it. If not, it releases
+//     the lock, tries to perform a merge, and if successful tries to commit
+//     again. Since it has released the lock, another process might already have
+//     commited. It retries for a number of times.
+//
+// -vbpt_tx_try_commit2 (using vbpt_mtree_try_commit2):
+//     takes the lock and checks to is if it can commit. If yes, that's it.
+//     If not, it tries to merge (still holding the lock) and if it succeeds
+//     it commits its changes.
+//
+
 static inline vbpt_txt_res_t
-vbpt_txt_try_commit(vbpt_txtree_t *txt, vbpt_mtree_t *mt,
+vbpt_txt_try_commit(vbpt_txtree_t *txt,
+                    vbpt_mtree_t *mt,
                     unsigned merge_repeats)
 {
 	vbpt_txt_res_t ret = VBPT_COMMIT_OK;
-	vbpt_tree_t *tx_tree = txt->tree;
-	ver_t *bver = txt->bver;
+	vbpt_tree_t *tx_tree = txt->tree; // transaction tree
+	ver_t *bver = txt->bver;          // transaction base version
 
 	VBPT_START_TIMER(txt_try_commit);
-	for (unsigned i=0;;) {
+	unsigned cnt;
+	for (cnt = 0; ;cnt++) {
 		vbpt_tree_t gtree;
 		if (vbpt_mtree_try_commit(mt, tx_tree, bver, &gtree)) {
 			vbpt_tree_destroy(&gtree);
-			goto end;
+			goto success;
 		}
 
 		ret = VBPT_COMMIT_MERGED;
 		// try to merge (TODO: we know Vj, implement better merge)
-		//tmsg("trying to merge %zd to %zd\n", tx_tree->ver->v_id, gtree.ver->v_id);
+		//tmsg("trying to merge %zd to %zd\n",
+		//      tx_tree->ver->v_id, gtree.ver->v_id);
 		bool ret_merge = vbpt_merge(&gtree, tx_tree, &bver);
 		vbpt_tree_destroy(&gtree);
 		if (!ret_merge) {
@@ -111,18 +128,76 @@ vbpt_txt_try_commit(vbpt_txtree_t *txt, vbpt_mtree_t *mt,
 			break;
 		}
 
-		if (i++ == merge_repeats) {
+		if (cnt == merge_repeats) {
 			ret = VBPT_COMMIT_FAILED;
 			break;
 		}
+
+		//XXX: There seems to be a bug when looping back: versions with
+		// ->rfcnt_children = 2 when no branches should exist in the
+		// version tree. Need to investigate.
+		//ret = VBPT_COMMIT_FAILED;
+		//break;
 	}
 
+	/* failure */
 	vbpt_tree_dealloc(tx_tree);
-end:
+success:
+	VBPT_XCNT_ADD(merge_iters, cnt);
 	free(txt);
 	vbpt_txt_update_stats(ret);
 	VBPT_STOP_TIMER(txt_try_commit);
 	return ret;
+}
+
+static inline vbpt_txt_res_t
+vbpt_txt_try_commit2(vbpt_txtree_t *txt, vbpt_mtree_t *mt)
+{
+	vbpt_txt_res_t result;
+	vbpt_tree_t *old_tree;
+	vbpt_tree_t *tx_tree = txt->tree;
+	ver_t *bver = txt->bver;
+
+	VBPT_START_TIMER(txt_try_commit);
+
+	spin_lock(&mt->mt_lock);
+
+	// try to commit
+	if (vbpt_mtree_try_commit2(mt, tx_tree, bver, &old_tree)) {
+		vbpt_tree_dealloc(old_tree);
+		result = VBPT_COMMIT_OK;
+		goto success;
+	}
+
+	// still holding the lock, try to merge
+	if (vbpt_merge(old_tree, tx_tree, &bver)) {
+		// merge succeeded
+		vbpt_tree_t *old_tree2;
+		bool ret;
+		ret = vbpt_mtree_try_commit2(mt, tx_tree, bver, &old_tree2);
+
+		// we holded the lock before calling, so no change should have
+		// happened on mtree
+		if (!ret) {
+			fprintf(stderr, "This should not happen\n");
+			abort();
+		}
+		assert(old_tree == old_tree2);
+
+		result = VBPT_COMMIT_MERGED;
+		goto success;
+	}
+
+	// failed to merge, need to clean up
+	result = VBPT_COMMIT_MERGE_FAILED;
+	spin_unlock(&mt->mt_lock);
+	vbpt_tree_dealloc(tx_tree);
+
+success:
+	free(txt);
+	vbpt_txt_update_stats(result);
+	VBPT_STOP_TIMER(txt_try_commit);
+	return result;
 }
 
 #endif /* VBPT_TX_ */
