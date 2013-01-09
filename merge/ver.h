@@ -401,6 +401,21 @@ ver_rebase(ver_t *ver, ver_t *new_parent)
 	ver_setparent__(ver, new_parent);
 }
 
+/**
+ * detach: detach version from the chain
+ *   sets parent to NULL
+ */
+static inline void
+ver_detach(ver_t *ver)
+{
+	if (ver->parent) {
+		refcnt_dec__(&ver->parent->rfcnt_children);
+		refcnt_dec(&ver->parent->rfcnt_total, ver_release);
+		//ver_tree_gc(ver);
+	}
+	ver->parent = NULL;
+}
+
 /* branch (i.e., fork) a version */
 static inline ver_t *
 ver_branch(ver_t *parent)

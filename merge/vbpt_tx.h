@@ -141,6 +141,7 @@ vbpt_txt_try_commit(vbpt_txtree_t *txt,
 	}
 
 	/* failure */
+	ver_detach(tx_tree->ver);
 	vbpt_tree_dealloc(tx_tree);
 success:
 	VBPT_XCNT_ADD(merge_iters, cnt);
@@ -191,6 +192,7 @@ vbpt_txt_try_commit2(vbpt_txtree_t *txt, vbpt_mtree_t *mt)
 	// failed to merge, need to clean up
 	result = VBPT_COMMIT_MERGE_FAILED;
 	spin_unlock(&mt->mt_lock);
+	ver_detach(tx_tree->ver);
 	vbpt_tree_dealloc(tx_tree);
 
 success:
