@@ -106,7 +106,7 @@ vbpt_file_pwrite(vbpt_tree_t *tree, off_t offset, const void *buff, size_t len)
 			vbpt_leaf_t *l;
 			vbpt_logtree_insert(tree, key, new, &l);
 			assert(l == NULL);
-		} else if (ver_eq(ver, old->l_hdr.ver)) {
+		} else if (vref_eqver(old->l_hdr.vref, ver)) {
 			// modify in-place
 			vbpt_leaf_t *leaf = (vbpt_leaf_t *)old;
 			memcpy(leaf->data + dst_off, src, src_len);

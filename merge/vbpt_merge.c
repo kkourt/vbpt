@@ -53,7 +53,7 @@ vbpt_cur_str(vbpt_cur_t *cur)
 	       "cur: range:[%4lu+%4lu] null:%u null_max_key:%6lu v:%s",
 	       cur->range.key, cur->range.len,
 	       cur->flags.null, cur->null_maxkey,
-	       ver_str(vbpt_cur_ver((vbpt_cur_t *)cur)));
+	       vref_str(vbpt_cur_vref((vbpt_cur_t *)cur)));
 	return buff;
 	#undef CURSTR_BUFF_SIZE
 	#undef CURSTR_BUFFS_NR
@@ -66,7 +66,7 @@ vbpt_cur_print(const vbpt_cur_t *cur)
 	       cur->range.key, cur->range.len,
 	       cur->flags.null, cur->null_maxkey,
 	       cur->tree,
-	       ver_str(vbpt_cur_ver((vbpt_cur_t *)cur)));
+	       vref_str(vbpt_cur_vref((vbpt_cur_t *)cur)));
 }
 
 /**
@@ -120,24 +120,24 @@ vbpt_cur_free(vbpt_cur_t *cur)
 }
 
 /**
- * Return the version of the node that the cursor points to
+ * Return the vref of the node that the cursor points to
  *
- *  Note that NULL areas have the version of the last node in the tree. This is
- *  a bit conservative because we can't distinguish if the NULL range was there
+ *  Note that NULL areas have the vref of the last node in the tree. This is a
+ *  bit conservative because we can't distinguish if the NULL range was there
  *  before the last node's version or not.
  */
-ver_t *
-vbpt_cur_ver(const vbpt_cur_t *cur)
+vref_t
+vbpt_cur_vref(const vbpt_cur_t *cur)
 {
 	const vbpt_path_t *path = &cur->path;
 	const vbpt_tree_t *tree = cur->tree;
 	if (path->height == 0) {
-		return tree->ver;
+		return vref_get__(tree->ver);
 	} else if (!vbpt_cur_null(cur)) {
-		return vbpt_cur_hdr((vbpt_cur_t *)cur)->ver;
+		return vbpt_cur_hdr((vbpt_cur_t *)cur)->vref;
 	} else { // cursor points to NULL, return the version of the last node
 		vbpt_node_t *pnode = path->nodes[path->height -1];
-		return pnode->n_hdr.ver;
+		return pnode->n_hdr.vref;
 	}
 }
 
@@ -517,9 +517,10 @@ vbpt_cur_mark_delete(vbpt_cur_t *c, ver_t *jv, uint16_t p_dist)
 	vbpt_path_t *path = &c->path;
 	vbpt_node_t *pnode = path->nodes[path->height -1];
 
-	// Is COW needed?
-	ver_t *pver = pnode->n_hdr.ver;
-	if (!ver_ancestor_strict_limit(jv, pver, p_dist)) {
+	// Is COW needed? (parent has to be strictly after jv)
+	// TODO: verify this is correct via a test/better rationale
+	vref_t pvref = pnode->n_hdr.vref;
+	if (vref_ancestor_limit(pvref, jv, p_dist)) {
 		return -1;
 	}
 	assert(refcnt_get(&pnode->n_hdr.h_refcnt) == 1);
@@ -646,8 +647,10 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 	}
 
 	// we are going to modify p_pnode, check if COW is needed
-	ver_t *p_pver = p_pnode->n_hdr.ver;
-	if (!ver_ancestor_strict_limit(merge.vj, p_pver, merge.p_dist)) {
+	// (parent has to be strictly after vj)
+	// TODO: verify this is correct via a test/better rationale
+	vref_t p_pvref = p_pnode->n_hdr.vref;
+	if (!vref_ancestor_limit(p_pvref, merge.pver, merge.p_dist-1)) {
 		return false;
 	}
 	assert(refcnt_get(&p_pnode->n_hdr.h_refcnt) == 1);
@@ -682,6 +685,7 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 		uint16_t levels = p_height - g_height;
 		new_hdr = &(vbpt_node_chain(pc->tree, levels, p_key, new_hdr)->n_hdr);
 		assert(false && "need to fix the path");
+		abort();
 	}
 
 	vbpt_hdr_t *old_hdr __attribute__((unused));
@@ -698,6 +702,7 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 			pc->flags.null = 0;
 		} else {
 			assert(false && "Need to fix the path?");
+			abort();
 		}
 	}
 
@@ -768,7 +773,6 @@ vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree)
 }
 
 
-
 /**
  * helper function for merging when cursors are at the same range
  *  see vbpt_merge() for more details
@@ -785,11 +789,12 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 {
 	VBPT_MERGE_INC_COUNTER(merge_steps);
 	assert(vbpt_range_eq(&gc->range, &pc->range));
-	ver_t *gc_v = vbpt_cur_ver(gc);
-	ver_t *pc_v = vbpt_cur_ver(pc);
+	vref_t gc_vref = vbpt_cur_vref(gc);
+	vref_t pc_vref = vbpt_cur_vref(pc);
 	#if defined(XDEBUG_MERGE)
-	tmsg("range: %4lu,+%3lu gc_v:%s \tpc_v:%s\n",
-	      gc->range.key, gc->range.len, ver_str(gc_v), ver_str(pc_v));
+	tmsg("range: %4lu,+%3lu gc_vref:%s \tpc_vref:%s\n",
+	      gc->range.key, gc->range.len,
+	      vref_str(gc_vref), vref_str(pc_vref));
 	#endif
 	assert(merge.g_dist > 0);
 	assert(merge.p_dist > 0);
@@ -798,15 +803,15 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	vbpt_range_t *range = &pc->range;
 
 	/*
-         * (gc_v)------>|
-         *              |
+	 * (gc_vref)--->|
+	 *              |
 	 *             (vj)
 	 *            /   \
 	 *           /     \
 	 *          /     (pver)
 	 *        (gver)
 	 */
-	if (!ver_ancestor_limit(gc_v, merge.gver, merge.g_dist - 1)) {
+	if (!vref_ancestor_limit(gc_vref, merge.gver, merge.g_dist - 1)) {
 		#if defined(XDEBUG_MERGE)
 		dmsg("NO CHANGES in gc_v\n");
 		#endif
@@ -815,15 +820,15 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	}
 
 	/*
-         *              |<-----(pc_v)
-         *              |
-	 *             (vj)
-	 *            /   \
-	 *  (gc_v)-->/     \
-	 *          /     (pver)
-	 *        (gver)
+	 *                |<-----(pc_vref)
+	 *                |
+	 *               (vj)
+	 *              /   \
+	 * (gc_vref)-->/     \
+	 *            /     (pver)
+	 *          (gver)
 	 */
-	if (!ver_ancestor_limit(pc_v, merge.pver, merge.p_dist - 1)) {
+	if (!vref_ancestor_limit(pc_vref, merge.pver, merge.p_dist - 1)) {
 		#if defined(XDEBUG_MERGE)
 		dmsg("Only gc_v changed\n");
 		#endif
@@ -841,12 +846,12 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	}
 
 	/*
-         *              |
-	 *             (vj)
-	 *            /   \<----(pc_v)
-	 *  (gc_v)-->/     \
-	 *          /     (pver)
-	 *        (gver)
+	 *                 |
+	 *                (vj)
+	 *               /   \<----(pc_vref)
+	 *  (gc_vref)-->/     \
+	 *             /     (pver)
+	 *           (gver)
 	 */
 	 #if defined(XDEBUG_MERGE)
 	 dmsg("Both changed\n");
@@ -923,7 +928,6 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	/* we need to go deeper */
 	return 0;
 }
-
 
 /**
  * merge @ptree with @gtree -> result in @ptree

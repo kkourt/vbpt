@@ -17,7 +17,7 @@ typedef struct vbpt_cur   vbpt_cur_t;
 vbpt_cur_t *vbpt_cur_alloc(vbpt_tree_t *);
 void vbpt_cur_free(vbpt_cur_t *);
 
-ver_t *vbpt_cur_ver(const vbpt_cur_t *);
+vref_t vbpt_cur_vref(const vbpt_cur_t *cur);
 
 void vbpt_cur_down(vbpt_cur_t *);
 void vbpt_cur_downrange(vbpt_cur_t *, const vbpt_cur_t *);

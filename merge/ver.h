@@ -65,9 +65,11 @@
  *
  * A possible solution would be to "version" the versions with a unique
  * identifier, and add it to the version node references, so that we can quickly
- * check if this a version that was reallocated. We do not follow this approach.
+ * check if this a version that was reallocated. Note, however, that in this
+ * case it is not safe to dereference version references in nodes. The only
+ * valid operation is to compare them with a version from the version tree.
  *
- * Instead, we use two reference counts: one for keeping a version to the
+ * Alternatively, we use two reference counts: one for keeping a version to the
  * version tree (rfcnt_children), and one for reclaiming the version
  * (rfcnt_total). We use rfcnt_children to remove a version from the tree, and
  * rfcnt_total to reclaim the version. Removing versions eagerly from the tree
@@ -117,6 +119,9 @@
  * NULL for nodes that have the same version as their parent on the tree.
  */
 
+//#define VERS_VERSIONED
+//#define VREFS_ALWAYS_VALID // for debugging purposes
+
 /**
  * Interface overview
  *
@@ -144,6 +149,9 @@ struct ver {
 	size_t     v_id;
 	#endif
 	vbpt_log_t v_log;
+	#if defined (VERS_VERSIONED)
+	uint64_t   v_seq;
+	#endif
 };
 typedef struct ver ver_t;
 
@@ -183,6 +191,8 @@ ver_str(ver_t *ver)
 	snprintf(buff, VERSTR_BUFF_SIZE, " (ver:%p ) ", ver);
 	#endif
 	return buff;
+	#undef VERSTR_BUFF_SIZE
+	#undef VERSTR_BUFFS_NR
 }
 
 static inline char *
@@ -452,6 +462,10 @@ ver_leq(ver_t *ver1, ver_t *ver2)
 	return false;
 }
 
+/**
+ * check if @v_p is an ancestor of v_ch.
+ *   if @v_p == @v_ch the function returns true
+ */
 static inline bool
 ver_ancestor(ver_t *v_p, ver_t *v_ch)
 {
@@ -478,6 +492,10 @@ ver_ancestor_limit(ver_t *v_p, ver_t *v_ch, uint16_t max_d)
 	return false;
 }
 
+/**
+ * check if @v_p is a strict ancestor of @v_ch
+ *   if @v_p == @v_ch, the function returns false
+ */
 static inline bool
 ver_ancestor_strict(ver_t *v_p, ver_t *v_ch)
 {
@@ -604,6 +622,134 @@ vbpt_log_parent(vbpt_log_t *log)
 	ver_t *ver = vbpt_log2ver(log);
 	ver_t *ver_p = ver_parent(ver);
 	return (ver_p != NULL) ? &ver_p->v_log : NULL;
+}
+
+/**
+ * Version references.
+ */
+
+// a reference to a version
+struct vref {
+	struct ver *ver_;
+	#if defined(VERS_VERSIONED)
+	uint64_t    ver_seq;
+	#endif
+
+	#ifndef NDEBUG
+	size_t      vid;
+	#endif
+};
+typedef struct vref vref_t;
+
+static inline vref_t
+vref_get(ver_t *ver)
+{
+	vref_t ret;
+
+	#if defined(VERS_VERSIONED)
+	ret.ver_    = ver;
+	ret.ver_seq = ver->v_seq;
+	#else
+	ret.ver_    = ver_getref(ver);
+	#endif
+
+	#if !defined(NDEBUG)
+	ret.vid = ver->v_id;
+	#endif
+	return ret;
+}
+
+// the difference with vref_get() is that if VERS_VERSIONED is _not_ defined, we
+// dont't increase the refcnt of ver.
+static inline vref_t
+vref_get__(ver_t *ver)
+{
+	vref_t ret;
+
+	#if defined(VERS_VERSIONED)
+	ret.ver_    = ver;
+	ret.ver_seq = ver->v_seq;
+	#else
+	ret.ver_    = ver;
+	#endif
+
+	#if !defined(NDEBUG)
+	ret.vid = ver->v_id;
+	#endif
+	return ret;
+}
+
+static inline void
+vref_put(vref_t vref)
+{
+	#if !defined(VERS_VERSIONED)
+	ver_putref(vref.ver_);
+	#endif
+}
+
+static inline bool
+vref_eq(vref_t vref1, vref_t vref2)
+{
+	bool ret = (vref1.ver_ == vref2.ver_);
+	#if defined(VERS_VERSIONED)
+	ret = ret && (vref1.ver_seq == vref2.ver_seq);
+	#endif
+	return ret;
+}
+
+static inline bool
+vref_eqver(vref_t vref, ver_t *ver)
+{
+	bool ret = (vref.ver_ == ver);
+	#if defined (VERS_VERSIONED)
+	ret = ret && (vref.ver_seq == ver->v_seq);
+	#endif
+	return ret;
+}
+
+// return true only if we surely know that the version is valid
+static inline bool
+vref_valid(vref_t ver)
+{
+#if defined(VREFS_ALWAYS_VALID)
+	return true;
+#else
+	return false;
+#endif
+}
+
+static inline char *
+vref_str(vref_t vref)
+{
+	#define VREFSTR_BUFF_SIZE 128
+	#define VREFSTR_BUFFS_NR   16
+	static int i=0;
+	static char buff_arr[VREFSTR_BUFFS_NR][VREFSTR_BUFF_SIZE];
+	char *buff = buff_arr[i++ % VREFSTR_BUFFS_NR];
+	#ifndef NDEBUG
+	snprintf(buff, VREFSTR_BUFF_SIZE, " [ver:%3zd] ", vref.vid);
+	#else
+	snprintf(buff, VREFSTR_BUFF_SIZE, " (ver:%p ) ", vref.ver_);
+	#endif
+	return buff;
+	#undef VREFSTR_BUFF_SIZE
+	#undef VREFSTR_BUFF_NR
+}
+
+/**
+ * check if @vref_p is an ancestor of @v_ch, assuming they have no more of
+ * @max_d distance.
+ *  if @vref_p == @v_ch the function returns true
+ */
+static inline bool
+vref_ancestor_limit(vref_t vref_p, ver_t *v_ch, uint16_t max_d)
+{
+	ver_t *v = v_ch;
+	for (uint16_t i=0; v != NULL && i < max_d + 1; v = v->parent, i++) {
+		if (vref_eqver(vref_p, v))
+			return true;
+	}
+	return false;
 }
 
 #endif

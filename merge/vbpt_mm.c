@@ -11,11 +11,10 @@
 static inline void
 vbpt_hdr_init(vbpt_hdr_t *hdr, ver_t *ver, enum vbpt_type type)
 {
-	hdr->ver = ver_getref(ver);
+	hdr->vref = vref_get(ver);
 	refcnt_init(&hdr->h_refcnt, 1);
 	hdr->type = type;
 }
-
 
 /**
  * we maintain two list of nodes:
@@ -151,7 +150,7 @@ vbpt_node_alloc(size_t node_size, ver_t *ver)
 void
 vbpt_node_dealloc(vbpt_node_t *node)
 {
-	ver_putref(node->n_hdr.ver);
+	vref_put(node->n_hdr.vref);
 	// add node to list
 	node->mm_next = vbptCache.mm_nodes;
 	vbptCache.mm_nodes = node;
@@ -181,7 +180,7 @@ void
 vbpt_leaf_dealloc(vbpt_leaf_t *leaf)
 {
 	vbptCache.mm_stats.leafs_released++;
-	ver_putref(leaf->l_hdr.ver);
+	vref_put(leaf->l_hdr.vref);
 	// add leaf to list
 	leaf->mm_next = vbptCache.mm_leafs;
 	vbptCache.mm_leafs = leaf;

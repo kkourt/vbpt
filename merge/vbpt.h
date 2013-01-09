@@ -23,7 +23,7 @@ enum vbpt_type {
  * now we inline it.
  */
 struct vbpt_hdr {
-	ver_t           *ver;
+	vref_t       vref;
 	refcnt_t        h_refcnt;
 	enum vbpt_type  type;
 };

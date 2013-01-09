@@ -47,7 +47,9 @@ char *
 vbpt_hdr_str(vbpt_hdr_t *hdr)
 {
 	static char buff[128];
-	snprintf(buff, sizeof(buff), " (%s cnt:%u) ", ver_str(hdr->ver), refcnt_(&hdr->h_refcnt));
+	snprintf(buff, sizeof(buff),
+	         " (%s cnt:%u) ",
+	         vref_str(hdr->vref), refcnt_(&hdr->h_refcnt));
 	return buff;
 }
 
@@ -79,11 +81,17 @@ vbpt_node_verify(vbpt_node_t *node)
 	if (kvp0->val->type == VBPT_LEAF)
 		return;
 
-	/** NOTE: we do this only for internal nodes, because vbpt_log_replay()
+	// In principle the only thing you can do with version references is
+	// compare them with actual versions, which means that the following is
+	// not possible. For debugging purposes, however, we could add support
+	// for it in ver.h by e.g., never freeing versions
+	#if 0
+	/* NOTE: we do this only for internal nodes, because vbpt_log_replay()
 	 * does not change the version of the leafs */
 	for (unsigned i=0; i < node->items_nr; i++) {
-		ver_t *child_ver = node->kvp[i].val->ver;
-		if (!ver_leq(child_ver, node->n_hdr.ver)) {
+		vref_t child_ver = node->kvp[i].val->ver;
+		vref_t parnt_ver = node->n_hdr.ver;
+		if (!ver_leq(child_ver, parnt_ver)) {
 			fprintf(stderr,
 			        "child has version %s"
 			         "and parent has version %s\n",
@@ -94,6 +102,7 @@ vbpt_node_verify(vbpt_node_t *node)
 			assert(false);
 		}
 	}
+	#endif
 
 
 	for (unsigned i=0; i < node->items_nr; i++) {
@@ -393,7 +402,7 @@ cow_node(vbpt_tree_t *tree, vbpt_node_t *parent, uint16_t parent_slot)
 {
 	assert(parent_slot < parent->items_nr);
 	ver_t *ver = vbpt_tree_ver(tree);
-	assert(parent->n_hdr.ver == ver);
+	assert(vref_eqver(parent->n_hdr.vref, ver));
 	uint64_t key = parent->kvp[parent_slot].key;
 	vbpt_node_t *old = hdr2node(parent->kvp[parent_slot].val);
 	vbpt_node_t *new = vbpt_node_alloc(VBPT_NODE_SIZE, ver);
@@ -546,7 +555,7 @@ move_items_from_left(vbpt_tree_t *tree,
 	//   @left is left of @node
 	assert(get_left_sibling(node, path) == left);
 	//   no need to COW
-	assert(node->n_hdr.ver == left->n_hdr.ver);
+	assert(vref_eq(node->n_hdr.vref, left->n_hdr.vref));
 	//   there is enough space in node
 	assert(node->items_total - node->items_nr >= mv_items);
 	//   there are anough items in left
@@ -589,7 +598,7 @@ move_items_from_right(vbpt_tree_t *tree,
 	//   @right is right of @node
 	assert(pnode->kvp[pnode_slot +1].val == &right->n_hdr);
 	//   no need to COW
-	assert(node->n_hdr.ver == right->n_hdr.ver);
+	assert(vref_eq(node->n_hdr.vref, right->n_hdr.vref));
 	//   there is enough space in node
 	assert(node->items_total - node->items_nr >= mv_items);
 	//   there are anough items in left
@@ -635,7 +644,7 @@ move_items_left(vbpt_tree_t *tree,
 	//   @left is left of @node
 	assert(pnode->kvp[pnode_slot -1].val == &left->n_hdr);
 	//   no need to COW
-	assert(node->n_hdr.ver == left->n_hdr.ver);
+	assert(vref_eq(node->n_hdr.vref, left->n_hdr.vref));
 	//   there are enough items in node
 	assert(node->items_nr >= mv_items);
 	//   there is enough space in @left
@@ -692,7 +701,7 @@ move_items_right(vbpt_tree_t *tree,
 	//   @right is right of @node
 	assert(get_right_sibling(node, path) == right);
 	//   no need to COW
-	assert(node->n_hdr.ver == right->n_hdr.ver);
+	assert(vref_eq(node->n_hdr.vref, right->n_hdr.vref));
 	//   there are enough items in @node
 	assert(node->items_nr >= mv_items);
 	//   there is enough space in @right
@@ -749,8 +758,8 @@ move_items_left_right(vbpt_tree_t *tree, vbpt_node_t  *node,
 	//   @left  is left of @node
 	assert(pnode->kvp[pnode_slot-1].val == &left->n_hdr);
 	//   no need to COW
-	assert(node->n_hdr.ver == left->n_hdr.ver);
-	assert(node->n_hdr.ver == right->n_hdr.ver);
+	assert(vref_eq(node->n_hdr.vref, left->n_hdr.vref));
+	assert(vref_eq(node->n_hdr.vref, right->n_hdr.vref));
 	//   there are enough items in @node
 	assert(node->items_nr >= right_items + left_items);
 	//   there is enough space in @right
@@ -842,13 +851,13 @@ try_balance_node_nocow(vbpt_tree_t *tree,
                        vbpt_node_t *node, vbpt_node_t *left, vbpt_node_t *right,
                        vbpt_path_t *path)
 {
-	ver_t *ver = node->n_hdr.ver;
-	bool l_merge = left && left->n_hdr.ver == ver;
-	bool r_merge = right && right->n_hdr.ver == ver;
+	vref_t vref = node->n_hdr.vref;
+	bool l_merge = left  && vref_eq( left->n_hdr.vref, vref);
+	bool r_merge = right && vref_eq(right->n_hdr.vref, vref);
 	uint16_t l_rem = (l_merge) ? left->items_total  - left->items_nr  : 0;
 	uint16_t r_rem = (r_merge) ? right->items_total - right->items_nr : 0;
 	if (l_rem >= node->items_nr) {
-		// all of @node's item can be placed in @left
+		// all of @node's items can be placed in @left
 		move_items_left(tree, node, left, path, node->items_nr);
 		assert(path->nodes[path->height -1] == left);
 	} else if (r_rem >= node->items_nr) {
@@ -871,7 +880,7 @@ balance_right(vbpt_tree_t *tree,
 	assert(node = path->nodes[path->height-1]);
 	vbpt_node_t *pnode = path->nodes[path->height-2];
 	uint16_t pslot     = path->slots[path->height-2];
-	if (right->n_hdr.ver != tree->ver) {
+	if (vref_eqver(right->n_hdr.vref, tree->ver)) {
 		right = cow_node(tree, pnode, pslot+1);
 	}
 	uint16_t mv_items = right->items_nr / 2;
@@ -890,7 +899,7 @@ balance_left(vbpt_tree_t *tree,
 	assert(node = path->nodes[path->height-1]);
 	vbpt_node_t *pnode = path->nodes[path->height-2];
 	uint16_t pslot     = path->slots[path->height-2];
-	if (left->n_hdr.ver != tree->ver) {
+	if (vref_eqver(left->n_hdr.vref, tree->ver)) {
 		left = cow_node(tree, pnode, pslot-1);
 	}
 	uint16_t mv_items =  left->items_nr / 2;
@@ -918,7 +927,7 @@ try_balance_level(vbpt_tree_t *tree, vbpt_path_t *path)
 	vbpt_node_t *left = get_left_sibling(node, path);
 	vbpt_node_t *right = get_right_sibling(node, path);
 	// try to balance node
-	assert(vbpt_tree_ver(tree) == node->n_hdr.ver);
+	assert(vref_eqver(node->n_hdr.vref, vbpt_tree_ver(tree)));
 	try_balance_node_nocow(tree, node, left, right, path);
 
 	// reload node
@@ -997,11 +1006,11 @@ split_node(vbpt_tree_t *tree, vbpt_path_t *path)
 	}
 
 	vbpt_node_t *node = path->nodes[path->height - 1];
-	assert(ver_eq(ver, node->n_hdr.ver));
+	assert(vref_eqver(node->n_hdr.vref, ver));
 	uint16_t node_slot = path->slots[path->height -1];
 
 	vbpt_node_t *parent = path->nodes[path->height - 2];
-	assert(ver_eq(ver, parent->n_hdr.ver));
+	assert(vref_eqver(parent->n_hdr.vref, ver));
 	uint16_t parent_slot = path->slots[path->height - 2];
 
 	vbpt_node_t *new = vbpt_node_alloc(VBPT_NODE_SIZE, ver);
@@ -1098,8 +1107,8 @@ try_decrease_height(vbpt_tree_t *tree, vbpt_path_t *path)
 	if (!vbpt_isnode(hdr_next)) // root's item should point to a node
 		return 0;
 
-	assert(tree->ver == tree->root->n_hdr.ver); // now COW needed
-	assert(tree->ver == hdr_next->ver);         // now COW needed
+	assert(vref_eqver(tree->root->n_hdr.vref, tree->ver)); // now COW needed
+	assert(vref_eqver(hdr_next->vref, tree->ver));         // now COW needed
 
 	vbpt_node_t *next = hdr2node(hdr_next);
 	tree->root = next;
@@ -1112,10 +1121,10 @@ try_decrease_height(vbpt_tree_t *tree, vbpt_path_t *path)
 }
 
 static bool
-cow_needed(vbpt_tree_t *tree, ver_t *ver, int op)
+cow_needed(vbpt_tree_t *tree, vref_t vref, int op)
 {
 	ver_t *tver = tree->ver;
-	if (op == 0 || ver_eq(tver, ver))
+	if (op == 0 || vref_eqver(vref, tver))
 		return false;
 
 	// @ver must be a child of @tver
@@ -1186,7 +1195,7 @@ vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
 {
 	VBPT_START_TIMER(vbpt_search);
 	vbpt_node_t *node = tree->root;
-	if (cow_needed(tree, node->n_hdr.ver, op))
+	if (cow_needed(tree, node->n_hdr.vref, op))
 		node = cow_root(tree);
 
 	for (uint16_t lvl = path->height = 0; ; ) {
@@ -1241,7 +1250,7 @@ vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
 			// node with a single element. Balancing is not so good,
 			// but the old structure is maintained.
 			// Note that this can be disabled
-			if (l->ver != tree->ver) {
+			if (!vref_eqver(l->vref, tree->ver)) {
 				build_node_chain(tree, path, key);
 				break;
 			}
@@ -1266,12 +1275,12 @@ vbpt_search(vbpt_tree_t *tree, uint64_t key, int op,
 		}
 
 		vbpt_node_t *node_next;
-		if (!cow_needed(tree, hdr_next->ver, op)) {
+		if (!cow_needed(tree, hdr_next->vref, op)) {
 			node_next = hdr2node(hdr_next);
 		} else {
 			node_next = cow_node(tree, node, slot);
 		}
-		assert(!cow_needed(tree, node_next->n_hdr.ver, op));
+		assert(!cow_needed(tree, node_next->n_hdr.vref, op));
 		node = node_next;
 		lvl++;
 	}
