@@ -997,7 +997,7 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	if (merge.vj == VER_JOIN_FAIL) {
 		VBPT_MERGE_INC_COUNTER(join_failed);
 		merge_ok = false;
-		goto end;
+		goto fail;
 	}
 	#if defined(XDEBUG_MERGE)
 	dmsg("VERSIONS: gver:%s  pver:%s  vj:%s g_dist:%d p_dist:%d\n",
@@ -1017,7 +1017,7 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 		VBPT_MERGE_STOP_TIMER(do_merge);
 		if (ret == -1) {
 			merge_ok = false;
-			goto end;
+			goto fail;
 		} else if (ret == 0) {
 			//VBPT_MERGE_START_TIMER(cur_down);
 			vbpt_cur_down(&gc);
@@ -1039,7 +1039,7 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	assert(ver_ancestor(merge.gver, merge.pver));
 	assert(ver_ancestor(merge.gver, merge.hpver));
 	//VBPT_MERGE_STOP_TIMER(ver_rebase);
-end:
+fail:
 	#if defined(XDEBUG_MERGE)
 	dmsg("MERGE %s\n", merge_ok ? "SUCCEEDED":"FAILED");
 	#endif

@@ -10,3 +10,4 @@ tbench-*
 core
 cscope.out
 gmon.out
+perf.hist*
