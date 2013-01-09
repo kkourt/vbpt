@@ -577,6 +577,25 @@ vbpt_cur_nodekey(const vbpt_cur_t *cur)
 }
 
 /**
+ * Helper structure for merge
+ * (see bellow for more details)
+ *
+ *      |-            (vj)       -|
+ *      |            /   \      p_dist
+ *   g_dist         /     \       |
+ *      |          /     (pver)  -|
+ *      |-       (gver)
+ */
+struct vbpt_merge {
+	ver_t   *vj;
+	ver_t   *gver;
+	ver_t   *pver;
+	ver_t   *hpver;
+	uint16_t p_dist;
+	uint16_t g_dist;
+};
+
+/**
  * try to replace node pointed by @pc with node pointed by @gc, knowing that @gc
  * does not point to null
  *   if unsuccessful, return false
@@ -596,7 +615,7 @@ vbpt_cur_nodekey(const vbpt_cur_t *cur)
  */
 static bool
 vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
-                    ver_t *jv, uint16_t p_dist)
+                    struct vbpt_merge merge)
 {
 	assert(!vbpt_cur_null(gc));
 	uint16_t p_height = vbpt_cur_height(pc);
@@ -628,7 +647,7 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 
 	// we are going to modify p_pnode, check if COW is needed
 	ver_t *p_pver = p_pnode->n_hdr.ver;
-	if (!ver_ancestor_strict_limit(jv, p_pver, p_dist)) {
+	if (!ver_ancestor_strict_limit(merge.vj, p_pver, merge.p_dist)) {
 		return false;
 	}
 	assert(refcnt_get(&p_pnode->n_hdr.h_refcnt) == 1);
@@ -693,7 +712,7 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
  */
 bool
 vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
-                 ver_t *jv, uint16_t p_dist)
+                 struct vbpt_merge merge)
 {
 	VBPT_MERGE_START_TIMER(cur_replace);
 	//dmsg("REPLACE: "); vbpt_cur_print(pc);
@@ -701,11 +720,12 @@ vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 	//tmsg("REPLACE %s WITH %s\n", vbpt_cur_str(pc), vbpt_cur_str((vbpt_cur_t *)gc));
 	bool ret;
 	if (vbpt_cur_null(gc)) {
-		ret = (vbpt_cur_null(pc) || vbpt_cur_mark_delete(pc, jv, p_dist));
+		ret = (vbpt_cur_null(pc)
+		       || vbpt_cur_mark_delete(pc, merge.vj, merge.p_dist));
 	} else {
 		tsc_t t2; tsc_init(&t2); tsc_start(&t2);
 		VBPT_MERGE_START_TIMER(cur_do_replace);
-		ret = vbpt_cur_do_replace(pc, gc, jv, p_dist);
+		ret = vbpt_cur_do_replace(pc, gc, merge);
 		VBPT_MERGE_STOP_TIMER(cur_do_replace);
 	}
 	VBPT_MERGE_STOP_TIMER(cur_replace);
@@ -757,17 +777,11 @@ vbpt_log_merge(vbpt_tree_t *gtree, vbpt_tree_t *ptree)
  *  -1 : if a conflict was detected
  *   0 : if more information is needed -- cursors need to move down
  *   1 : if merge was successful
- *
- *      |-            (jv)       -|
- *      |            /   \      p_dist
- *   g_dist         /     \       |
- *      |          /     (pv)    -|
- *      |-       (gv)
  */
 static int
 do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
         const vbpt_tree_t *gtree, vbpt_tree_t *ptree,
-        ver_t *gv, ver_t  *pv, uint16_t g_dist, uint16_t p_dist, ver_t *jv)
+	struct vbpt_merge merge)
 {
 	VBPT_MERGE_INC_COUNTER(merge_steps);
 	assert(vbpt_range_eq(&gc->range, &pc->range));
@@ -777,8 +791,8 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	tmsg("range: %4lu,+%3lu gc_v:%s \tpc_v:%s\n",
 	      gc->range.key, gc->range.len, ver_str(gc_v), ver_str(pc_v));
 	#endif
-	assert(g_dist > 0);
-	assert(p_dist > 0);
+	assert(merge.g_dist > 0);
+	assert(merge.p_dist > 0);
 	vbpt_log_t *plog = vbpt_tree_log(ptree);
 	vbpt_log_t *glog = vbpt_tree_log((vbpt_tree_t *)gtree);
 	vbpt_range_t *range = &pc->range;
@@ -786,13 +800,13 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	/*
          * (gc_v)------>|
          *              |
-	 *             (jv)
+	 *             (vj)
 	 *            /   \
 	 *           /     \
-	 *          /     (pv)
-	 *        (gv)
+	 *          /     (pver)
+	 *        (gver)
 	 */
-	if (!ver_ancestor_limit(gc_v, gv, g_dist - 1)) {
+	if (!ver_ancestor_limit(gc_v, merge.gver, merge.g_dist - 1)) {
 		#if defined(XDEBUG_MERGE)
 		dmsg("NO CHANGES in gc_v\n");
 		#endif
@@ -803,13 +817,13 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 	/*
          *              |<-----(pc_v)
          *              |
-	 *             (jv)
+	 *             (vj)
 	 *            /   \
 	 *  (gc_v)-->/     \
-	 *          /     (pv)
-	 *        (gv)
+	 *          /     (pver)
+	 *        (gver)
 	 */
-	if (!ver_ancestor_limit(pc_v, pv, p_dist - 1)) {
+	if (!ver_ancestor_limit(pc_v, merge.pver, merge.p_dist - 1)) {
 		#if defined(XDEBUG_MERGE)
 		dmsg("Only gc_v changed\n");
 		#endif
@@ -817,26 +831,26 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// check if private tree read something that is under the
 		// current (changed in the global tree) range. If it did,
 		// it would read an older value, so we need to abort.
-		if (vbpt_log_rs_range_exists(plog, range, p_dist)) {
+		if (vbpt_log_rs_range_exists(plog, range, merge.p_dist)) {
 			return -1;
 		}
 		//assert(pc_v != gc_v);
 		// we need to effectively replace the node pointed by @pv with
 		// the node pointed by @gc
-		return vbpt_cur_replace(pc, gc, jv, p_dist) ? 1: -1;
+		return vbpt_cur_replace(pc, gc, merge) ? 1: -1;
 	}
 
 	/*
          *              |
-	 *             (jv)
+	 *             (vj)
 	 *            /   \<----(pc_v)
 	 *  (gc_v)-->/     \
-	 *          /     (pv)
-	 *        (gv)
+	 *          /     (pver)
+	 *        (gver)
 	 */
 	 #if defined(XDEBUG_MERGE)
 	 dmsg("Both changed\n");
-	 //dmsg("base: %s\n", ver_str(jv));
+	 //dmsg("base: %s\n", ver_str(merge.vj));
 	 dmsg("pc:"); vbpt_cur_print(pc);
 	 dmsg("gc:"); vbpt_cur_print(gc);
 	 dmsg("\n");
@@ -855,8 +869,9 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// read an item from the previous state, which may not have been
 		// NULL.  We could also check whether @glog contains a delete to
 		// that range.
-		int ret = vbpt_log_rs_range_exists(plog, range, p_dist) ? -1:1;
-		return ret;
+		return vbpt_log_rs_range_exists(plog,
+		                                range,
+		                                merge.p_dist) ? -1 : 1;
 	} else if (vbpt_cur_null(pc)) {
 		VBPT_MERGE_INC_COUNTER(pc_null);
 		#if defined(XDEBUG_MERGE)
@@ -864,12 +879,12 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		#endif
 		// @pc points to NULL, but @gc does not. If @pv did not read or
 		// delete anything in that range, we can replace @pc with @gc.
-		if (vbpt_log_rs_range_exists(plog, range, p_dist))
+		if (vbpt_log_rs_range_exists(plog, range, merge.p_dist))
 			return -1;
-		if (vbpt_log_ds_range_exists(plog, range, p_dist))
+		if (vbpt_log_ds_range_exists(plog, range, merge.p_dist))
 			return -1;
 		//printf("trying to replace pc with gc\n");
-		return vbpt_cur_replace(pc, gc, jv, p_dist) ? 1: -1;
+		return vbpt_cur_replace(pc, gc, merge) ? 1: -1;
 	} else if (vbpt_cur_null(gc)) {
 		VBPT_MERGE_INC_COUNTER(gc_null);
 		#if defined(XDEBUG_MERGE)
@@ -881,17 +896,17 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 		// inserted it) we would need to delete it.
 
 		// Since, however, @gc points to NULL, if there are no deletions
-		// in Log(J->G), then @jv pointed to NULL for gc->range. Hence,
+		// in Log(J->G), then @vj pointed to NULL for gc->range. Hence,
 		// if there are no Reads in Log(J->P), there is no conflict.
-		if (!vbpt_log_ds_range_exists(glog, range, g_dist) &&
-		    !vbpt_log_rs_range_exists(plog, range, p_dist)) {
+		if (!vbpt_log_ds_range_exists(glog, range, merge.g_dist) &&
+		    !vbpt_log_rs_range_exists(plog, range, merge.p_dist)) {
 			return 1;
 		}
 
 		// special case: this is a leaf that we now has changed after
 		// @vj -- we just keep it similarly to leaf checks
 		if (range->len == 1 &&
-		    !vbpt_log_rs_key_exists(plog, range->key, p_dist))
+		    !vbpt_log_rs_key_exists(plog, range->key, merge.p_dist))
 			return 1;
 
 		//printf("gc is null, I ran out of options\n");
@@ -900,7 +915,9 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 
 	assert(!vbpt_cur_null(gc) && !vbpt_cur_null(pc));
 	if (range->len == 1) {
-		return vbpt_log_rs_key_exists(plog, range->key, p_dist) ? -1:1;
+		return vbpt_log_rs_key_exists(plog,
+		                              range->key,
+		                              merge.p_dist) ? -1 : 1;
 	}
 
 	/* we need to go deeper */
@@ -955,13 +972,12 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
 bool
 vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 {
-	VBPT_MERGE_START_TIMER(merge);
+	VBPT_MERGE_START_TIMER(vbpt_merge);
 
 	#if defined(XDEBUG_MERGE)
 	dmsg("Global  "); vbpt_tree_print_limit((vbpt_tree_t *)gt, true, 1);
 	dmsg("Private "); vbpt_tree_print_limit(pt, true, 1);
 	#endif
-
 
 	//VBPT_MERGE_START_TIMER(cur_init);
 	vbpt_cur_t gc, pc;
@@ -970,21 +986,23 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	bool merge_ok = true;
 	//VBPT_MERGE_STOP_TIMER(cur_init);
 
-	uint16_t g_dist, p_dist;
-	ver_t *hpver = NULL; // initialize to shut the compiler up
-	ver_t *gver = gt->ver;
-	ver_t *pver = pt->ver;
+	struct vbpt_merge merge;
+	merge.gver = gt->ver;
+	merge.pver = pt->ver;
 	//VBPT_MERGE_START_TIMER(ver_join);
-	ver_t *vj = ver_join(gver, pver, &hpver, &g_dist, &p_dist);
+	merge.vj = ver_join(merge.gver, merge.pver,
+	                    &merge.hpver,
+	                    &merge.g_dist, &merge.p_dist);
 	//VBPT_MERGE_STOP_TIMER(ver_join);
-	if (vj == VER_JOIN_FAIL) {
+	if (merge.vj == VER_JOIN_FAIL) {
 		VBPT_MERGE_INC_COUNTER(join_failed);
 		merge_ok = false;
 		goto end;
 	}
 	#if defined(XDEBUG_MERGE)
 	dmsg("VERSIONS: gver:%s  pver:%s  vj:%s g_dist:%d p_dist:%d\n",
-	      ver_str(gver), ver_str(pver), ver_str(vj), g_dist, p_dist);
+	      ver_str(merge.gver), ver_str(merge.pver), ver_str(merge.vj),
+	      merge.g_dist, merge.p_dist);
 	#endif
 
 	while (!(vbpt_cur_end(&gc) && vbpt_cur_end(&pc))) {
@@ -995,7 +1013,7 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 		//VBPT_MERGE_STOP_TIMER(cur_sync);
 
 		VBPT_MERGE_START_TIMER(do_merge);
-		int ret = do_merge(&gc, &pc, gt, pt, gver, pver, g_dist, p_dist, vj);
+		int ret = do_merge(&gc, &pc, gt, pt, merge);
 		VBPT_MERGE_STOP_TIMER(do_merge);
 		if (ret == -1) {
 			merge_ok = false;
@@ -1014,12 +1032,12 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	}
 	/* success: fix version tree */
 	//VBPT_MERGE_START_TIMER(ver_rebase);
-	assert(!ver_chain_has_branch(pver, hpver));
-	ver_rebase(hpver, gver);
+	assert(!ver_chain_has_branch(merge.pver, merge.hpver));
+	ver_rebase(merge.hpver, merge.gver);
 	if (vbase)
-		*vbase = gver;
-	assert(ver_ancestor(gver, pver));
-	assert(ver_ancestor(gver, hpver));
+		*vbase = merge.gver;
+	assert(ver_ancestor(merge.gver, merge.pver));
+	assert(ver_ancestor(merge.gver, merge.hpver));
 	//VBPT_MERGE_STOP_TIMER(ver_rebase);
 end:
 	#if defined(XDEBUG_MERGE)
@@ -1033,7 +1051,7 @@ end:
 		VBPT_INC_COUNTER(merge_fail);
 	#endif
 
-	VBPT_MERGE_STOP_TIMER(merge);
+	VBPT_MERGE_STOP_TIMER(vbpt_merge);
 	return merge_ok;
 }
 

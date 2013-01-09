@@ -32,7 +32,7 @@ struct vbpt_merge_stats {
 	uint64_t merge_steps_max;
 	uint64_t merges;
 	uint64_t join_failed;
-	tsc_t    merge;
+	tsc_t    vbpt_merge;
 	tsc_t    cur_down;
 	tsc_t    cur_next;
 	tsc_t    do_merge;

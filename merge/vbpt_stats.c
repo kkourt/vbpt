@@ -81,7 +81,7 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 	pr_ticks(logtree_insert);
 	pr_ticks(logtree_get);
 	pr_ticks(cow_leaf_write);
-	pr_ticks(m.merge);
+	pr_ticks(m.vbpt_merge);
 	//pr_ticks(m.cur_do_replace);
 	//pr_ticks(m.cur_do_replace_putref);
 	//pr_ticks(m.cur_down);

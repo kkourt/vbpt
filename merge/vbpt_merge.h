@@ -28,9 +28,6 @@ bool vbpt_cur_end(vbpt_cur_t *);
 void vbpt_cur_sync(vbpt_cur_t *cur1, vbpt_cur_t *cur2);
 static inline bool vbpt_cur_null(const vbpt_cur_t *c);
 
-bool vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
-                      ver_t *vj, uint16_t p_dist);
-
 bool vbpt_cmp(vbpt_tree_t *t1, vbpt_tree_t *t2);
 
 /**
