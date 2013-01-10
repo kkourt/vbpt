@@ -62,6 +62,7 @@ struct vbpt_stats {
 	tsc_t                    vbpt_cache_get_node;
 	tsc_t                    vbpt_app;
 	tsc_t                    ver_tree_gc;
+	tsc_t                    temp_ticks;
 	uint64_t                 commit_ok;
 	uint64_t                 commit_fail;
 	uint64_t                 commit_merge_ok;
