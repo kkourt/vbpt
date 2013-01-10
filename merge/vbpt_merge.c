@@ -1,4 +1,3 @@
-
 #include "ver.h"
 #include "vbpt.h"
 #include "vbpt_merge.h"
@@ -50,10 +49,10 @@ vbpt_cur_str(vbpt_cur_t *cur)
 	static char buff_arr[CURSTR_BUFFS_NR][CURSTR_BUFF_SIZE];
 	char *buff = buff_arr[i++ % CURSTR_BUFFS_NR];
 	snprintf(buff, CURSTR_BUFF_SIZE,
-	       "cur: range:[%4lu+%4lu] null:%u null_max_key:%6lu v:%s",
-	       cur->range.key, cur->range.len,
-	       cur->flags.null, cur->null_maxkey,
-	       vref_str(vbpt_cur_vref((vbpt_cur_t *)cur)));
+	         "cur: range:[%4lu+%4lu] null:%u null_max_key:%6lu v:%s",
+	          cur->range.key, cur->range.len,
+	          cur->flags.null, cur->null_maxkey,
+	          vref_str(vbpt_cur_vref((vbpt_cur_t *)cur)));
 	return buff;
 	#undef CURSTR_BUFF_SIZE
 	#undef CURSTR_BUFFS_NR
@@ -934,6 +933,9 @@ do_merge(const vbpt_cur_t *gc, vbpt_cur_t *pc,
  *  @gtree: globally viewable version of the tree
  *  @ptree: transaction-private version of the tree
  *
+ * Note that this code assumes that ver_rebase_prepare() has been called on
+ * gtree->ver
+ *
  * The merging happens  *in-place* in @ptree. If successful, true is returned.
  * If not, false is returned, and @ptree is invalid.
  *
@@ -987,7 +989,7 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	vbpt_cur_t gc, pc;
 	vbpt_cur_init(&gc, (vbpt_tree_t *)gt);
 	vbpt_cur_init(&pc, pt);
-	bool merge_ok = true;
+	bool merge_ok;
 	//VBPT_MERGE_STOP_TIMER(cur_init);
 
 	struct vbpt_merge merge;
@@ -1000,7 +1002,6 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	//VBPT_MERGE_STOP_TIMER(ver_join);
 	if (merge.vj == VER_JOIN_FAIL) {
 		VBPT_MERGE_INC_COUNTER(join_failed);
-		merge_ok = false;
 		goto fail;
 	}
 	#if defined(XDEBUG_MERGE)
@@ -1021,7 +1022,6 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 		int ret = do_merge(&gc, &pc, gt, pt, merge);
 		VBPT_MERGE_STOP_TIMER(do_merge);
 		if (ret == -1) {
-			merge_ok = false;
 			goto fail;
 		} else if (ret == 0) {
 			//VBPT_MERGE_START_TIMER(cur_down);
@@ -1042,16 +1042,18 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 		}
 		*/
 	}
+
 	/* success: fix version tree */
+	merge_ok = true;
 	//VBPT_MERGE_START_TIMER(ver_rebase);
 	assert(!ver_chain_has_branch(merge.pver, merge.hpver));
-	ver_rebase(merge.hpver, merge.gver);
+	ver_rebase_commit(merge.hpver, merge.gver);
 	if (vbase)
 		*vbase = merge.gver;
 	assert(ver_ancestor(merge.gver, merge.pver));
 	assert(ver_ancestor(merge.gver, merge.hpver));
 	//VBPT_MERGE_STOP_TIMER(ver_rebase);
-fail:
+end:
 	#if defined(XDEBUG_MERGE)
 	dmsg("MERGE %s\n", merge_ok ? "SUCCEEDED":"FAILED");
 	#endif
@@ -1062,9 +1064,12 @@ fail:
 	else
 		VBPT_INC_COUNTER(merge_fail);
 	#endif
-
 	VBPT_MERGE_STOP_TIMER(vbpt_merge);
 	return merge_ok;
+fail:
+	merge_ok = false;
+	ver_rebase_abort(merge.gver);
+	goto end;
 }
 
 #if defined(VBPT_SYNC_TEST)

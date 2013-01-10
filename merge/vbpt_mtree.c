@@ -37,8 +37,10 @@ vbpt_mtree_dealloc(vbpt_mtree_t *mtree, vbpt_tree_t **tree_ptr)
 		vbpt_tree_dealloc(tree);
 		ver_tree_gc(v);
 		if (v->parent != NULL) {
+			// this should not happen, we should be able to collect
+			// all of the version chain at this point
 			ver_chain_print(v);
-			exit(1);
+			//exit(1);
 		}
 		ver_unpin(v);
 	}
@@ -49,7 +51,19 @@ vbpt_mtree_dealloc(vbpt_mtree_t *mtree, vbpt_tree_t **tree_ptr)
  *
  * @tree:        the new version of the tree
  * @b_ver:       the version @tree is based on
+ *
  * @mt_tree_dst: if not NULL, a copy of old version of the tree is placed here
+ *               if the commit fails.
+ *
+ *               The tree reference is intended to be used by the caller to
+ *               perform a merge. Doing the copy (essentially just taking a
+ *               reference) under the lock guarantees that the tree won't
+ *               dissapear while the caller performs the merge.
+ *
+ *               In addition, if @mt_tree_dst is not NULL, ver_rebase_prepare
+ *               will be called on its version. Doing it under the lock, assures
+ *               that the version won't get collected before the merge adds a
+ *               child to it.
  *
  * if (un)successful true (false) is returned.
  *
@@ -64,6 +78,7 @@ vbpt_mtree_try_commit(vbpt_mtree_t *mtree, vbpt_tree_t *tree,
 	VBPT_START_TIMER(mtree_try_commit);
 	bool committed = false;
 	vbpt_tree_t *mt_tree;
+
 	spin_lock(&mtree->mt_lock);
 	ver_t *cur_ver = (mt_tree = mtree->mt_tree)->ver;
 	//tmsg("trying to commit ver:%zd to cur_ver:%zd\n",
@@ -73,19 +88,22 @@ vbpt_mtree_try_commit(vbpt_mtree_t *mtree, vbpt_tree_t *tree,
 		//     tree->ver->v_id, cur_ver->v_id);
 		mtree->mt_tree = tree;
 		committed = true;
-	}
-	if (mt_tree_dst)
+	} else if (mt_tree_dst) {
+		// failure: copy tree to mt_tree_dst, so that caller can try to
+		// merge
 		vbpt_tree_copy(mt_tree_dst, mt_tree);
+		ver_rebase_prepare(mt_tree->ver);
+	}
 	spin_unlock(&mtree->mt_lock);
 
 	// pin without holding the lock
 	if (committed) {
-		ver_pin(mtree->mt_tree->ver, mt_tree->ver);
+		ver_pin(tree->ver, mt_tree->ver);
 
 		// run gc for versions before the pinned version
 		// if somebody else has the lock, just continue
 		if (spin_try_lock(&mtree->gc_lock)) {
-			ver_tree_gc(mtree->mt_tree->ver);
+			ver_tree_gc(tree->ver);
 			spin_unlock(&mtree->gc_lock);
 		}
 
@@ -174,11 +192,12 @@ vbpt_mtree_try_commit3(vbpt_mtree_t *mtree,
 	spin_lock(&mtree->mt_lock);
 	*mt_tree_old_ptr = mtree->mt_tree;
 	ver_old          = mtree->mt_tree->ver;
-	committed = false;
 	if (ver_eq(ver_old, b_ver)) {
 		mtree->mt_tree = tree;
-		// commit aftermath
 		committed = true;
+	} else {
+		committed = false;
+		ver_rebase_prepare(ver_old);
 	}
 	spin_unlock(&mtree->mt_lock);
 

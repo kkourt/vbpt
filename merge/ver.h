@@ -385,6 +385,20 @@ ver_unpin(ver_t *ver)
 	refcnt_dec(&ver->rfcnt_total, ver_release);
 }
 
+// grab a child reference
+static inline void
+ver_get_child_ref(ver_t *ver)
+{
+	refcnt_inc__(&ver->rfcnt_children); // do not check if it's zero
+	refcnt_inc(&ver->rfcnt_total);
+}
+
+static inline void
+ver_put_child_ref(ver_t *ver)
+{
+	refcnt_dec__(&ver->rfcnt_children);
+	refcnt_dec(&ver->rfcnt_total, ver_release);
+}
 
 /**
  * set parent without checking for previous parent
@@ -392,9 +406,32 @@ ver_unpin(ver_t *ver)
 static inline void
 ver_setparent__(ver_t *v, ver_t *parent)
 {
-	refcnt_inc__(&parent->rfcnt_children); // do not check if it's zero
-	refcnt_inc(&parent->rfcnt_total);
+	ver_get_child_ref(parent);
 	v->parent = parent;
+}
+
+/**
+ * prepare a version rebase.  at the new parent won't be removed from the
+ * version chain under our nose
+ */
+static inline void
+ver_rebase_prepare(ver_t *new_parent)
+{
+	ver_get_child_ref(new_parent);
+}
+
+static inline void
+ver_rebase_commit(ver_t *ver, ver_t *new_parent)
+{
+	if (ver->parent)
+		ver_put_child_ref(ver->parent);
+	ver->parent = new_parent;
+}
+
+static inline void
+ver_rebase_abort(ver_t *new_parent)
+{
+	ver_put_child_ref(new_parent);
 }
 
 /**
@@ -402,12 +439,11 @@ ver_setparent__(ver_t *v, ver_t *parent)
  *  If previous parent is not NULL, refcount will be decreased
  *  Will get a new referece of @new_parent
  */
-static inline void
+static inline void __attribute__((deprecated))
 ver_rebase(ver_t *ver, ver_t *new_parent)
 {
 	if (ver->parent) {
-		refcnt_dec__(&ver->parent->rfcnt_children);
-		refcnt_dec(&ver->parent->rfcnt_total, ver_release);
+		ver_put_child_ref(ver->parent);
 		//ver_tree_gc(ver);
 	}
 	ver_setparent__(ver, new_parent);
@@ -421,8 +457,7 @@ static inline void
 ver_detach(ver_t *ver)
 {
 	if (ver->parent) {
-		refcnt_dec__(&ver->parent->rfcnt_children);
-		refcnt_dec(&ver->parent->rfcnt_total, ver_release);
+		ver_put_child_ref(ver->parent);
 		//ver_tree_gc(ver);
 	}
 	ver->parent = NULL;

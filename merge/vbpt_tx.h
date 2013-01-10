@@ -113,7 +113,6 @@ vbpt_txt_try_commit(vbpt_txtree_t *txt,
 	for (cnt = 0; ;cnt++) {
 		vbpt_tree_t gtree;
 		if (vbpt_mtree_try_commit(mt, tx_tree, bver, &gtree)) {
-			vbpt_tree_destroy(&gtree);
 			goto success;
 		}
 
