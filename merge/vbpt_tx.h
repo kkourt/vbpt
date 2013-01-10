@@ -160,11 +160,10 @@ vbpt_txt_try_commit2(vbpt_txtree_t *txt, vbpt_mtree_t *mt)
 	ver_t *bver = txt->bver;
 
 	VBPT_START_TIMER(txt_try_commit);
-
-	spin_lock(&mt->mt_lock);
+	spin_lock(&mt->tx_lock);
 
 	// try to commit
-	if (vbpt_mtree_try_commit2(mt, tx_tree, bver, &old_tree)) {
+	if (vbpt_mtree_try_commit3(mt, tx_tree, bver, &old_tree)) {
 		vbpt_tree_dealloc(old_tree);
 		result = VBPT_COMMIT_OK;
 		goto success;
@@ -175,7 +174,7 @@ vbpt_txt_try_commit2(vbpt_txtree_t *txt, vbpt_mtree_t *mt)
 		// merge succeeded
 		vbpt_tree_t *old_tree2;
 		bool ret;
-		ret = vbpt_mtree_try_commit2(mt, tx_tree, bver, &old_tree2);
+		ret = vbpt_mtree_try_commit3(mt, tx_tree, bver, &old_tree2);
 
 		// we holded the lock before calling, so no change should have
 		// happened on mtree
@@ -185,13 +184,14 @@ vbpt_txt_try_commit2(vbpt_txtree_t *txt, vbpt_mtree_t *mt)
 		}
 		assert(old_tree == old_tree2);
 
+		vbpt_tree_dealloc(old_tree);
 		result = VBPT_COMMIT_MERGED;
 		goto success;
 	}
 
 	// failed to merge, need to clean up
 	result = VBPT_COMMIT_MERGE_FAILED;
-	spin_unlock(&mt->mt_lock);
+	spin_unlock(&mt->tx_lock);
 	ver_detach(tx_tree->ver);
 	vbpt_tree_dealloc(tx_tree);
 

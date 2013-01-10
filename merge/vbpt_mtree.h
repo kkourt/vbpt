@@ -22,13 +22,15 @@
 /**
  * Mutable trees:
  * @tree_current current tree version
- * @mt_lock  atomically update mtree
- * @gc_lock  serializing version gc
+ * @mt_lock  serialize access to mtree
+ * @gc_lock  serialize gc on version chain
+ * @tx_lock  to be used exclusively by transaction code
  */
 struct vbpt_mtree {
 	vbpt_tree_t *mt_tree;
 	spinlock_t   mt_lock;
 	spinlock_t   gc_lock;
+	spinlock_t   tx_lock;
 };
 typedef struct vbpt_mtree vbpt_mtree_t;
 
@@ -55,4 +57,8 @@ bool vbpt_mtree_try_commit2(vbpt_mtree_t *mtree,
                             ver_t *b_ver,
                             vbpt_tree_t **mt_tree_old_ptr);
 
+bool vbpt_mtree_try_commit3(vbpt_mtree_t *mtree,
+                            vbpt_tree_t *tree,
+                            ver_t *b_ver,
+                            vbpt_tree_t **mt_tree_old_ptr);
 #endif /* VBPT_MTREE_H */
