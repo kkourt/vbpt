@@ -68,6 +68,7 @@
  * check if this a version that was reallocated. Note, however, that in this
  * case it is not safe to dereference version references in nodes. The only
  * valid operation is to compare them with a version from the version tree.
+ * VERS_VERSIONED implements this approach
  *
  * Alternatively, we use two reference counts: one for keeping a version to the
  * version tree (rfcnt_children), and one for reclaiming the version
@@ -119,7 +120,7 @@
  * NULL for nodes that have the same version as their parent on the tree.
  */
 
-//#define VERS_VERSIONED
+#define VERS_VERSIONED
 //#define VREFS_ALWAYS_VALID // for debugging purposes
 
 /**
@@ -142,29 +143,42 @@
  */
 
 struct ver {
+
 	struct ver *parent;
-	refcnt_t   rfcnt_children;
-	refcnt_t   rfcnt_total;
 	#ifndef NDEBUG
 	size_t     v_id;
 	#endif
+
 	vbpt_log_t v_log;
+
 	#if defined (VERS_VERSIONED)
 	uint64_t   v_seq;
+	refcnt_t   rfcnt;
+	#else
+	refcnt_t   rfcnt_children;
+	refcnt_t   rfcnt_total;
 	#endif
 };
 typedef struct ver ver_t;
 
+ver_t *ver_mm_alloc(void);
+void   ver_mm_free(ver_t *ver);
 void ver_debug_init(ver_t *ver);
 
 static inline void
 ver_init__(ver_t *ver)
 {
+	#if defined(VERS_VERSIONED)
+	refcnt_init(&ver->rfcnt, 1);
+	#else
 	refcnt_init(&ver->rfcnt_total, 1);
 	refcnt_init(&ver->rfcnt_children, 0);
+	#endif
+
 	#ifndef NDEBUG
 	ver_debug_init(ver);
 	#endif
+
 	// XXX: ugly but useful
 	ver->v_log.state = VBPT_LOG_UNINITIALIZED;
 }
@@ -200,24 +214,30 @@ ver_fullstr(ver_t *ver)
 {
 	#define VERSTR_BUFF_SIZE 128
 	#define VERSTR_BUFFS_NR   16
+
 	static int i=0;
 	static char buff_arr[VERSTR_BUFFS_NR][VERSTR_BUFF_SIZE];
 	char *buff = buff_arr[i++ % VERSTR_BUFFS_NR];
+
 	#ifndef NDEBUG
+	#if defined(VERS_VERSIONED)
+	snprintf(buff, VERSTR_BUFF_SIZE,
+	         " [%p: ver:%3zd rfcnt:%3u] ",
+		 ver,
+	         ver->v_id,
+		 refcnt_get(&ver->rfcnt));
+	#else // !VERS_VERSIONED
 	snprintf(buff, VERSTR_BUFF_SIZE,
 	         " [%p: ver:%3zd rfcnt_children:%3u rfcnt_total:%3u] ",
 		 ver,
 	         ver->v_id,
 		 refcnt_get(&ver->rfcnt_children),
 		 refcnt_get(&ver->rfcnt_total));
-	#else
-	snprintf(buff, VERSTR_BUFF_SIZE,
-	         " [%12p: rfcnt_children:%3u rfcnt_total:%3u] ",
-		 ver,
-		 refcnt_get(&ver->rfcnt_children),
-		 refcnt_get(&ver->rfcnt_total));
-	#endif
+	#endif // !VERS_VERSIONED
+	#endif // !NDEBUG
+
 	return buff;
+
 	#undef VERSTR_BUFF_SIZE
 	#undef VERSTR_BUFFS_NR
 }
@@ -235,7 +255,11 @@ ver_path_print(ver_t *v, FILE *fp)
 static inline ver_t *
 refcnt_total2ver(refcnt_t *rcnt)
 {
+	#if defined(VERS_VERSIONED)
+	return container_of(rcnt, ver_t, rfcnt);
+	#else // !VERS_VERSIONED
 	return container_of(rcnt, ver_t, rfcnt_total);
+	#endif // !VERS_VERSIONED
 }
 
 /**
@@ -244,7 +268,11 @@ refcnt_total2ver(refcnt_t *rcnt)
 static inline ver_t *
 ver_getref(ver_t *ver)
 {
+	#if defined(VERS_VERSIONED)
+	refcnt_inc(&ver->rfcnt);
+	#else // !VERS_VERSIONED
 	refcnt_inc(&ver->rfcnt_total);
+	#endif // !VERS_VERSIONED
 	return ver;
 }
 
@@ -256,9 +284,36 @@ static void ver_release(refcnt_t *);
 static inline void
 ver_putref(ver_t *ver)
 {
+	#if defined(VERS_VERSIONED)
+	refcnt_dec(&ver->rfcnt, ver_release);
+	#else // !VERS_VERSIONED
 	refcnt_dec(&ver->rfcnt_total, ver_release);
+	#endif // !VERS_VERSIONED
 }
 
+// grab a child reference
+static inline void
+ver_get_child_ref(ver_t *ver)
+{
+	#if defined(VERS_VERSIONED)
+	refcnt_inc(&ver->rfcnt);
+	#else // !VERS_VERSIONED
+	refcnt_inc__(&ver->rfcnt_children); // do not check if it's zero
+	refcnt_inc(&ver->rfcnt_total);
+	#endif
+}
+
+// put a child reference
+static inline void
+ver_put_child_ref(ver_t *ver)
+{
+	#if defined(VERS_VERSIONED)
+	refcnt_dec(&ver->rfcnt, ver_release);
+	#else // !VERS_VERSIONED
+	refcnt_dec__(&ver->rfcnt_children);
+	refcnt_dec(&ver->rfcnt_total, ver_release);
+	#endif
+}
 
 /**
  * release a version
@@ -280,26 +335,25 @@ ver_release(refcnt_t *refcnt)
 	#endif
 
 	ver_t *parent = ver->parent;
-	if (parent != NULL) {
-		refcnt_dec__(&parent->rfcnt_children);
-		refcnt_dec(&parent->rfcnt_total, ver_release);
-	}
+	if (ver->parent != NULL)
+		ver_put_child_ref(parent);
+
 	if (ver->v_log.state != VBPT_LOG_UNINITIALIZED)
 		vbpt_log_destroy(&ver->v_log);
-	free(ver);
+
+	ver_mm_free(ver);
 }
 
 /* create a new version */
 static inline ver_t *
 ver_create(void)
 {
-	ver_t *ret = xmalloc(sizeof(ver_t));
+	ver_t *ret = ver_mm_alloc();
 	ret->parent = NULL;
 	ver_init__(ret);
 	return ret;
 }
 
-void ver_chain_print(ver_t *ver);
 
 /**
  * garbage collect the tree from @ver's parent and above
@@ -330,9 +384,18 @@ ver_tree_gc(ver_t *ver)
 			VBPT_STOP_TIMER(ver_tree_gc);
 			goto end;
 		}
+		#endif
+
+		#if defined(VERS_VERSIONED)
+		// Semantically, this number in the VERS_VERSIONED case might
+		// not be the number of children, since someone might hold a
+		// referrence to this version. However, the effect should be the
+		// same
+		children = refcnt_(&ver_p->rfcnt);
 		#else
 		children = refcnt_(&ver_p->rfcnt_children);
 		#endif
+
 		assert(children > 0);
 
 		// found a branch, reset the head of the chain
@@ -348,13 +411,13 @@ ver_tree_gc(ver_t *ver)
 	//VBPT_XCNT_ADD(ver_tree_gc_iters, count);
 	//tmsg("count=%lu ver->parent=%p\n", count, ver->parent);
 
-	// poison ->parent pointers of stale versions
+	// do it lazily? 
+	// maintain a chain and cal ver_put_child_ref() on allocation
 	ver_t *v = ver->parent;
 	while (v != NULL) {
 		ver_t *tmp = v->parent;
-		v->parent = NULL;
-		refcnt_dec__(&v->rfcnt_children);
-		refcnt_dec(&v->rfcnt_total, ver_release);
+		v->parent = NULL;       // remove @v from chain
+		ver_put_child_ref(v);
 		v = tmp;
 	}
 
@@ -366,39 +429,31 @@ ver_tree_gc(ver_t *ver)
 
 /**
  * pin a version from the tree:
- *  just run the garbage collector
+ *  just take/drop a reference
  *  See comment at begining of file for details
  */
 static inline void
 ver_pin(ver_t *pinned_new, ver_t *pinned_old)
 {
-	refcnt_inc(&pinned_new->rfcnt_total);
+	ver_getref(pinned_new);
 	if (pinned_old) {
-		refcnt_dec(&pinned_old->rfcnt_total, ver_release);
+		ver_putref(pinned_old);
 	}
+
+	// Since we require serialization for running ver_tree_gc(), we do not
+	// run it here. Instead, we leave it up to the caller to run it while
+	// making sure that only one ver_tree_gc() runs at any given time.
+	// Note, however, that pinning essentially marks pinned_old as eligible
+	// for garbage collection.
 	//ver_tree_gc(pinned_new);
 }
 
 static inline void
 ver_unpin(ver_t *ver)
 {
-	refcnt_dec(&ver->rfcnt_total, ver_release);
+	ver_putref(ver);
 }
 
-// grab a child reference
-static inline void
-ver_get_child_ref(ver_t *ver)
-{
-	refcnt_inc__(&ver->rfcnt_children); // do not check if it's zero
-	refcnt_inc(&ver->rfcnt_total);
-}
-
-static inline void
-ver_put_child_ref(ver_t *ver)
-{
-	refcnt_dec__(&ver->rfcnt_children);
-	refcnt_dec(&ver->rfcnt_total, ver_release);
-}
 
 /**
  * set parent without checking for previous parent
@@ -468,7 +523,7 @@ static inline ver_t *
 ver_branch(ver_t *parent)
 {
 	/* allocate and initialize new version */
-	ver_t *ret = xmalloc(sizeof(ver_t));
+	ver_t *ret = ver_mm_alloc();
 	ver_init__(ret);
 	/* increase the reference count of the parent */
 	ver_setparent__(ret, parent);
@@ -621,6 +676,11 @@ ver_join(ver_t *gver, ver_t *pver, ver_t **prev_v, uint16_t *gdist, uint16_t *pd
 static inline bool
 ver_chain_has_branch(ver_t *tail, ver_t *head)
 {
+	#if defined(VERS_VERSIONED)
+	// XXX We can't compute that when using VERS_VERSIONED. In any case it
+	// is used only for debugging, so we just return the expected value here
+	return false;
+	#else
 	ver_t *v = tail;
 	while (true) {
 		if (refcnt_get(&v->rfcnt_children) > 1)
@@ -631,6 +691,7 @@ ver_chain_has_branch(ver_t *tail, ver_t *head)
 		v = v->parent;
 	}
 	return false;
+	#endif
 }
 
 
@@ -686,9 +747,9 @@ vref_get(ver_t *ver)
 	#if defined(VERS_VERSIONED)
 	ret.ver_    = ver;
 	ret.ver_seq = ver->v_seq;
-	#else
+	#else // !VERS_VERSIONED
 	ret.ver_    = ver_getref(ver);
-	#endif
+	#endif // !VERS_VERSIONED
 
 	#if !defined(NDEBUG)
 	ret.vid = ver->v_id;
@@ -706,9 +767,9 @@ vref_get__(ver_t *ver)
 	#if defined(VERS_VERSIONED)
 	ret.ver_    = ver;
 	ret.ver_seq = ver->v_seq;
-	#else
+	#else    // !VERS_VERSIONED
 	ret.ver_    = ver;
-	#endif
+	#endif   // !VERS_VERSIONED
 
 	#if !defined(NDEBUG)
 	ret.vid = ver->v_id;
@@ -788,5 +849,8 @@ vref_ancestor_limit(vref_t vref_p, ver_t *v_ch, uint16_t max_d)
 	}
 	return false;
 }
+
+void ver_chain_print(ver_t *ver);
+
 
 #endif
