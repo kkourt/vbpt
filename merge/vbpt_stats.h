@@ -124,6 +124,7 @@ vbpt_stats_get(vbpt_stats_t *stats)
 #define VBPT_MERGE_STOP_TIMER(_x)  do {;} while (0)
 #define VBPT_MERGE_INC_COUNTER(_x) do {;} while (0)
 #define VBPT_MERGE_ADD_COUNTER(_x, v)  do {;} while (0)
+#define VBPT_XCNT_ADD(_x, val)  do {;} while(0)
 #endif // VBPT_STATS
 
 

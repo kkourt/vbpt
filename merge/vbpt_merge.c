@@ -692,9 +692,9 @@ vbpt_cur_do_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 	old_hdr = vbpt_insert_ptr(p_pnode, p_pslot, p_key, new_hdr);
 	assert(old_hdr == p_hdr);
 	if (p_hdr) {
-		VBPT_MERGE_START_TIMER(cur_do_replace_putref);
+		//VBPT_MERGE_START_TIMER(cur_do_replace_putref);
 		vbpt_hdr_putref(p_hdr);
-		VBPT_MERGE_STOP_TIMER(cur_do_replace_putref);
+		//VBPT_MERGE_STOP_TIMER(cur_do_replace_putref);
 	} else {
 		assert(vbpt_cur_null(pc));
 		if (pc->path.height != 0) {
@@ -719,7 +719,7 @@ bool
 vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
                  struct vbpt_merge merge)
 {
-	VBPT_MERGE_START_TIMER(cur_replace);
+	//VBPT_MERGE_START_TIMER(cur_replace);
 	//dmsg("REPLACE: "); vbpt_cur_print(pc);
 	//dmsg("WITH:    "); vbpt_cur_print(gc);
 	//tmsg("REPLACE %s WITH %s\n", vbpt_cur_str(pc), vbpt_cur_str((vbpt_cur_t *)gc));
@@ -729,11 +729,11 @@ vbpt_cur_replace(vbpt_cur_t *pc, const vbpt_cur_t *gc,
 		       || vbpt_cur_mark_delete(pc, merge.vj, merge.p_dist));
 	} else {
 		tsc_t t2; tsc_init(&t2); tsc_start(&t2);
-		VBPT_MERGE_START_TIMER(cur_do_replace);
+		//VBPT_MERGE_START_TIMER(cur_do_replace);
 		ret = vbpt_cur_do_replace(pc, gc, merge);
-		VBPT_MERGE_STOP_TIMER(cur_do_replace);
+		//VBPT_MERGE_STOP_TIMER(cur_do_replace);
 	}
-	VBPT_MERGE_STOP_TIMER(cur_replace);
+	//VBPT_MERGE_STOP_TIMER(cur_replace);
 	return ret;
 }
 

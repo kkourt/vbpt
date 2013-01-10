@@ -64,8 +64,10 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 	#define pr_cnt(x__) \
 		printf("%s" "%24s" ": %lu\n", prefix, "" #x__, st->x__)
 
-	#define pr_xcnt(x__) \
-		xcnt_report("" #x__, &st->x__)
+	#define pr_xcnt(x__) do { \
+		if (st->x__.cnt > 0) \
+			xcnt_report("" #x__, &st->x__); \
+	} while (0)
 
 	#if defined(VBPT_STATS)
 	pr_ticks(vbpt_app);
@@ -82,28 +84,30 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 	pr_ticks(logtree_get);
 	pr_ticks(cow_leaf_write);
 	pr_ticks(m.vbpt_merge);
-	//pr_ticks(m.cur_do_replace);
-	//pr_ticks(m.cur_do_replace_putref);
-	//pr_ticks(m.cur_down);
-	//pr_ticks(m.cur_next);
-	//pr_ticks(m.do_merge);
-	//pr_ticks(m.ver_join);
-	//pr_ticks(m.ver_rebase);
-	//pr_ticks(m.cur_sync);
-	//pr_ticks(m.cur_replace);
-	//pr_ticks(m.cur_init);
-	pr_cnt(commit_ok);
-	pr_cnt(commit_fail);
-	pr_cnt(commit_merge_ok);
-	pr_cnt(commit_merge_fail);
-	pr_cnt(merge_ok);
-	pr_cnt(merge_fail);
-	pr_cnt(m.gc_old);
-	pr_cnt(m.pc_old);
-	pr_cnt(m.both_null);
-	pr_cnt(m.pc_null);
-	pr_cnt(m.gc_null);
+	pr_ticks(m.cur_do_replace);
+	pr_ticks(m.cur_do_replace_putref);
+	pr_ticks(m.cur_down);
+	pr_ticks(m.cur_next);
+	pr_ticks(m.do_merge);
+	pr_ticks(m.ver_join);
+	pr_ticks(m.ver_rebase);
+	pr_ticks(m.cur_sync);
+	pr_ticks(m.cur_replace);
+	pr_ticks(m.cur_init);
+
+	//pr_cnt(commit_ok);
+	//pr_cnt(commit_fail);
+	//pr_cnt(commit_merge_ok);
+	//pr_cnt(commit_merge_fail);
+	//pr_cnt(merge_ok);
+	//pr_cnt(merge_fail);
+	//pr_cnt(m.gc_old);
+	//pr_cnt(m.pc_old);
+	//pr_cnt(m.both_null);
+	//pr_cnt(m.pc_null);
+	//pr_cnt(m.gc_null);
 	//pr_cnt(m.join_failed);
+
 	pr_xcnt(ver_tree_gc_iters);
 	pr_xcnt(merge_iters);
 	#endif

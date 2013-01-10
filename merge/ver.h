@@ -312,7 +312,7 @@ void ver_chain_print(ver_t *ver);
 static void inline
 ver_tree_gc(ver_t *ver)
 {
-	VBPT_START_TIMER(ver_tree_gc);
+	//VBPT_START_TIMER(ver_tree_gc);
 	ver_t *ver_p = ver->parent;
 	#if defined(VBPT_STATS)
 	uint64_t count = 0;
@@ -340,10 +340,12 @@ ver_tree_gc(ver_t *ver)
 			ver = ver_p;
 
 		ver_p = ver_p->parent;
+		#if defined(VBPT_STATS)
 		count++;
+		#endif
 	}
-	VBPT_STOP_TIMER(ver_tree_gc);
-	VBPT_XCNT_ADD(ver_tree_gc_iters, count);
+	//VBPT_STOP_TIMER(ver_tree_gc);
+	//VBPT_XCNT_ADD(ver_tree_gc_iters, count);
 	//tmsg("count=%lu ver->parent=%p\n", count, ver->parent);
 
 	// poison ->parent pointers of stale versions

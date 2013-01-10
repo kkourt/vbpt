@@ -296,7 +296,8 @@ merge_thr_print_stats(struct merge_thr_arg *arg)
 	//printf("\tmerge ticks: %lu [merge/total:%lf]\n",
 	//         merge_ticks, (double)merge_ticks/(double)arg->ticks);
 	//vbpt_merge_stats_do_report("\t", &s->merge_stats);
-	printf("\tmm_allocations: %lu\n", s->mm_stats.nodes_allocated);
+	//printf("\tmm_allocations: %lu\n", s->mm_stats.nodes_allocated);
+	vbpt_mm_stats_report("  ", &s->mm_stats);
 }
 
 static void

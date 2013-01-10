@@ -23,7 +23,7 @@ typedef struct vbpt_txtree vbpt_txtree_t;
 static inline vbpt_txtree_t *
 vbpt_txtree_alloc(vbpt_mtree_t *mtree)
 {
-	VBPT_START_TIMER(txtree_alloc);
+	//VBPT_START_TIMER(txtree_alloc);
 	vbpt_txtree_t *ret = xmalloc(sizeof(vbpt_txtree_t));
 
 	vbpt_tree_t *tree = vbpt_tree_alloc(NULL); // allocate a dummy tree
@@ -33,7 +33,7 @@ vbpt_txtree_alloc(vbpt_mtree_t *mtree)
 	ret->tree = tree;
 	ret->depth = 1;
 	ret->bver = tree->ver->parent;
-	VBPT_STOP_TIMER(txtree_alloc);
+	//VBPT_STOP_TIMER(txtree_alloc);
 	return ret;
 }
 
@@ -41,10 +41,10 @@ vbpt_txtree_alloc(vbpt_mtree_t *mtree)
 static inline void
 vbpt_txtree_dealloc(vbpt_txtree_t *txt)
 {
-	VBPT_START_TIMER(txtree_dealloc);
+	//VBPT_START_TIMER(txtree_dealloc);
 	vbpt_logtree_dealloc(txt->tree);
 	free(txt);
-	VBPT_STOP_TIMER(txtree_dealloc);
+	//VBPT_STOP_TIMER(txtree_dealloc);
 }
 
 /* transaction result */

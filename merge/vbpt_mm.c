@@ -38,7 +38,7 @@ vbpt_cache_prealloc(void)
 {
 	#if 0
 	const uint64_t prealloc_nodes = 32*1024;
-	const uint64_t prealloc_leafs = 32*1024;
+	const uint64_t prealloc_leafs = 256*1024;
 	for (uint64_t i=0; i<prealloc_nodes; i++) {
 		vbpt_node_t *node = xmalloc(VBPT_NODE_SIZE);
 		vbptCache.mm_stats.nodes_preallocated++;
