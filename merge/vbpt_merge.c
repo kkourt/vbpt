@@ -1009,6 +1009,7 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 	      merge.g_dist, merge.p_dist);
 	#endif
 
+	//unsigned steps = 0;
 	while (!(vbpt_cur_end(&gc) && vbpt_cur_end(&pc))) {
 		//VBPT_MERGE_START_TIMER(cur_sync);
 		assert(vbpt_path_verify((vbpt_tree_t *)gt, &gc.path));
@@ -1033,6 +1034,13 @@ vbpt_merge(const vbpt_tree_t *gt, vbpt_tree_t *pt, ver_t  **vbase)
 			vbpt_cur_next(&pc);
 			//VBPT_MERGE_STOP_TIMER(cur_next);
 		} else assert(false && "This should never happen");
+
+		/*
+		if (steps++ > 32) {
+			merge_ok = false;
+			goto fail;
+		}
+		*/
 	}
 	/* success: fix version tree */
 	//VBPT_MERGE_START_TIMER(ver_rebase);
