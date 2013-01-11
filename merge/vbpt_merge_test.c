@@ -8,6 +8,7 @@
 #include "vbpt_merge.h"
 #include "vbpt_mtree.h"
 #include "vbpt_tx.h"
+#include "vbpt_kv.h"
 
 #include "tsc.h"
 #include "array_size.h"
@@ -300,7 +301,7 @@ merge_thr_print_stats(struct merge_thr_arg *arg)
 	vbpt_mm_stats_report("  ", &s->mm_stats);
 }
 
-static void
+static void __attribute__((unused))
 vbpt_logtree_insert_rand(vbpt_tree_t *tree, struct dist_desc *d, unsigned *seed)
 {
 	ver_t *ver = tree->ver;
@@ -311,7 +312,7 @@ vbpt_logtree_insert_rand(vbpt_tree_t *tree, struct dist_desc *d, unsigned *seed)
 	}
 }
 
-static void
+static void __attribute__((unused))
 vbpt_tree_insert_rand(vbpt_tree_t *tree, struct dist_desc *d, unsigned *seed)
 {
 	ver_t *ver = tree->ver;
@@ -319,6 +320,26 @@ vbpt_tree_insert_rand(vbpt_tree_t *tree, struct dist_desc *d, unsigned *seed)
 		uint64_t key = dist_rand(d, seed);
 		vbpt_leaf_t *leaf = vbpt_leaf_alloc(VBPT_LEAF_SIZE, ver);
 		vbpt_insert(tree, key, leaf, NULL);
+	}
+}
+
+static void
+vbpt_kv_insert_rand(vbpt_tree_t *tree, struct dist_desc *d, unsigned *seed)
+{
+	for (uint64_t i=0; i<d->nr; i++) {
+		uint64_t key = dist_rand(d, seed);
+		uint64_t val = key;
+		vbpt_kv_insert(tree, key, val);
+	}
+}
+
+static void
+vbpt_logtree_kv_insert_rand(vbpt_tree_t *tree, struct dist_desc *d, unsigned *s)
+{
+	for (uint64_t i=0; i<d->nr; i++) {
+		uint64_t key = dist_rand(d, s);
+		uint64_t val = key;
+		vbpt_logtree_kv_insert(tree, key, val);
 	}
 }
 
@@ -349,7 +370,8 @@ merge_test_thr(void *arg_)
 			})
 			//tmsg("forked %zd from %zd\n", txt->tree->ver->v_id, txt->bver->v_id);
 			TSC_ADD_TICKS(arg->stats.insert_ticks, {
-				vbpt_logtree_insert_rand(txt->tree, arg->wl, &seed);
+				//vbpt_logtree_insert_rand(txt->tree, arg->wl, &seed);
+				vbpt_logtree_kv_insert_rand(txt->tree, arg->wl, &seed);
 			})
 			TSC_ADD_TICKS(arg->stats.finalize_ticks, {
 				vbpt_logtree_finalize(txt->tree);
@@ -461,7 +483,8 @@ do_test_mt_rand(struct dist_desc *d0,
 
 	vbpt_tree_t *tree = vbpt_tree_create();
 	unsigned seed = d0->seed;
-	vbpt_tree_insert_rand(tree, d0, &seed);
+	//vbpt_tree_insert_rand(tree, d0, &seed);
+	vbpt_kv_insert_rand(tree, d0, &seed);
 
 	vbpt_mt_merge_test(tree, nthreads, cpus, ds);
 }
