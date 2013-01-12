@@ -1,7 +1,8 @@
 *.o
 .*swp
 vbpt-test
-vbpt_merge_test
+vbpt_merge_serial_test
+vbpt_merge_mt_test
 vbpt_file_test
 perf.data*
 ver_test
