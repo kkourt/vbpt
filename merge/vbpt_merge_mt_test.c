@@ -15,7 +15,33 @@
 #include "array_size.h"
 #include "mt_lib.h"
 #include "xdist.h"
+#include "parse_int.h"
 
+// default parameter values
+#define DEF_RANGE_LEN 32768
+#define DEF_INS0      (DEF_RANGE_LEN / 128)
+#define DEF_TX_KEYS   32
+#define DEF_TX_RANGE  128
+#define DEF_NTXS      (16*1024)
+
+#define DEF_PARAMS { \
+	DEF_RANGE_LEN,  \
+	DEF_INS0,       \
+	DEF_TX_KEYS,    \
+	DEF_TX_RANGE,   \
+	DEF_NTXS        \
+}
+
+// test parameters
+struct params {
+	size_t    range_len;  // key range is from 0 to range_len - 1
+	size_t    ins0;       // number of keys initially inserted
+	size_t    tx_keys;    // number of keys per transaction
+	size_t    tx_range;   // transaction range
+	size_t    ntxs;       // number of transactions;
+};
+
+// statistics per thread
 struct merge_thr_stats {
 	unsigned long      failures;
 	unsigned long      merges;
@@ -31,6 +57,7 @@ struct merge_thr_stats {
 	struct vbpt_stats  vbpt_stats;
 };
 
+// thread arguments
 struct merge_thr_arg {
 	vbpt_mtree_t            *mtree;
 	struct xdist_desc       *wl;
@@ -42,6 +69,17 @@ struct merge_thr_arg {
 	spinlock_t              *lock;
 	struct merge_thr_stats  stats;
 };
+
+static void
+params_print(struct params *ps)
+{
+	printf("range_len:%zd ins0:%zd tx_keys:%zd tx_range:%zd ntxs:%zd\n",
+	        ps->range_len,
+	        ps->ins0,
+	        ps->tx_keys,
+	        ps->tx_range,
+	        ps->ntxs);
+}
 
 static void
 merge_thr_print_stats(struct merge_thr_arg *arg)
@@ -100,9 +138,10 @@ merge_test_thr(void *arg_)
 			TSC_ADD_TICKS(arg->stats.txtree_alloc_ticks, {
 				txt = vbpt_txtree_alloc(mtree);
 			})
-			//tmsg("forked %zd from %zd\n", txt->tree->ver->v_id, txt->bver->v_id);
+			//tmsg("forked %zd from %zd\n",
+			//      txt->tree->ver->v_id, txt->bver->v_id);
 			TSC_ADD_TICKS(arg->stats.insert_ticks, {
-				//vbpt_logtree_insert_rand(txt->tree, arg->wl, &seed);
+				//vbpt_logtree_insert_rand(txt->tree,arg->wl, &seed);
 				vbpt_logtree_kv_insert_rand(txt->tree, arg->wl, &seed);
 			})
 			TSC_ADD_TICKS(arg->stats.finalize_ticks, {
@@ -146,7 +185,8 @@ merge_test_thr(void *arg_)
 static void
 vbpt_mt_merge_test(vbpt_tree_t *tree,
                    unsigned nthreads, unsigned *cpus,
-                   struct xdist_desc *wls)
+                   struct xdist_desc *wls,
+                   uint64_t ntxs)
 {
 	pthread_barrier_t    barrier;
 	spinlock_t           lock;
@@ -158,7 +198,6 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 	if (pthread_barrier_init(&barrier, NULL, nthreads+1) != 0)
 		assert(false && "failed to initialize barrier");
 
-	const uint64_t ntxs = 16*1024;
 	uint64_t total_ops = 0;
 	spinlock_init(&lock);
 	for (unsigned i=0; i<nthreads; i++) {
@@ -199,7 +238,8 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 }
 
 static void __attribute__((unused))
-do_test_mt_rand(struct xdist_desc *d0,
+do_test_mt_rand(struct params *ps,
+                struct xdist_desc *d0,
                 unsigned nthreads, unsigned *cpus,
                 struct xdist_desc *ds)
 {
@@ -218,49 +258,45 @@ do_test_mt_rand(struct xdist_desc *d0,
 	//vbpt_tree_insert_rand(tree, d0, &seed);
 	vbpt_kv_insert_rand(tree, d0, &seed);
 
-	vbpt_mt_merge_test(tree, nthreads, cpus, ds);
+	vbpt_mt_merge_test(tree, nthreads, cpus, ds, ps->ntxs);
 }
 
 static void __attribute__((unused))
-test_mt_rand(unsigned nr_threads, unsigned *cpus)
+test_mt_rand(struct params *ps, unsigned nr_threads, unsigned *cpus)
 {
-	/**
-	 * create disjoint sets for each thread:
-	 *   d0:      initial data
-	 *   d:       thread-specific data
-	 *   d0_len:  key range (max key)
-	 *   d0_nr:   number of initial keys
-	 *   d_nr:    number of keys for transaction
-	 *   d_len:   key range for each thread
-	 */
-	const unsigned long d0_len = 32768;
-	const unsigned long d0_nr  = (d0_len/128); // /128
-	const unsigned long d_nr   = 32;
-	const unsigned long d_len  = 128;
-
+	struct xdist_desc dt[nr_threads];
 	struct xdist_desc d0 = {
 		.r_start = 0,
-		.r_len   = d0_len,
-		.nr      = d0_nr,
+		.r_len   = ps->range_len,
+		.nr      = ps->ins0,
 		.seed    = 1
 	};
-	struct xdist_desc dt[nr_threads];
 
-	const unsigned long part_len = d0_len / nr_threads;
+	const unsigned long part_len = ps->range_len / nr_threads;
 	assert(part_len > d_len);
 	for (unsigned i=0; i<nr_threads; i++) {
 		struct xdist_desc *d = dt + i;
+		d->nr      = ps->tx_keys;
 		d->r_start = part_len*i;
-		d->r_len   = d_len;
-		d->nr      = d_nr;
-		d->seed = 1;
+		d->r_len   = ps->tx_range;
+		d->seed    = 1;
 	}
 
-	do_test_mt_rand(&d0, nr_threads, cpus, dt);
+	do_test_mt_rand(ps, &d0, nr_threads, cpus, dt);
+}
+
+static void
+usage(const char *prog)
+{
+	struct params params = DEF_PARAMS;
+	printf("Usage: %s range,ins0,tx_keys,tx_range,ntxs\n", prog);
+	printf("   default:  "); params_print(&params);
+	exit(0);
 }
 
 int main(int argc, const char *argv[])
 {
+	// initialize with default values
 	#if 0
 	//do_test_mt_rand(&d0, 1, ds);
 	//do_test_mt_rand(&d0, 2, ds);
@@ -274,7 +310,24 @@ int main(int argc, const char *argv[])
 		printf("%d ", cpus[i]);
 	printf("\n");
 	#endif
-	test_mt_rand(ncpus, cpus);
+
+	if (argc < 2) {
+		usage(argv[0]);
+		exit(1);
+	}
+
+	int tuple[5] = DEF_PARAMS;
+	parse_int_tuple(argv[1], tuple, ARRAY_SIZE(tuple));
+	struct params params = {
+		.range_len = tuple[0],
+		.ins0      = tuple[1],
+		.tx_keys   = tuple[2],
+		.tx_range  = tuple[3],
+		.ntxs      = tuple[4]
+	};
+	printf("PS> "); params_print(&params);
+
+	test_mt_rand(&params, ncpus, cpus);
 
 	return 0;
 }

@@ -12,12 +12,11 @@ CFLAGS    += -DNDEBUG
 #CFLAGS   += $(EXTRA_WARNINGS)
 LIBS       = -lpthread
 hdrs       = $(wildcard *.h)
-vbpt_objs  = vbpt_merge.o vbpt.o ver.o phash.o mt_lib.o vbpt_mm.o vbpt_stats.o vbpt_mtree.o vbpt_kv.o
+vbpt_objs  = parse_int.o vbpt_merge.o vbpt.o ver.o phash.o mt_lib.o vbpt_mm.o vbpt_stats.o vbpt_mtree.o vbpt_kv.o
 vbpt_tests = vbpt_file_test vbpt_merge_serial_test vbpt_merge_mt_test
 fbenches   = fbench-nofiles fbench-sepfiles fbench-samefile fbench-vbpt
 tbenches   = tbench-vbpt
-progs      = ver_test vbpt-test $(vbpt_tests) $(fbenches) $(tbenches)
-vbpt_fobjs = vbpt.o
+progs      = ver_test vbpt-test vbpt_merge_serial_test $(vbpt_tests) $(fbenches) $(tbenches)
 
 ifeq (1,$(USE_TCMALLOC))
 	CFLAGS    += -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -ltcmalloc
@@ -37,7 +36,7 @@ else
 	vbpt_log  = vbpt_log.o
 endif
 
-vbpt_objs    += $(vbpt_log)
+vbpt_objs       += $(vbpt_log)
 
 # profiling
 # XXX: Does not seem to be working correctly
