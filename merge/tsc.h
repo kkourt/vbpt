@@ -149,29 +149,46 @@ static uint64_t tsc_getticks(tsc_t *tsc)
 	return tsc->ticks;
 }
 
-static inline double
-tsc_getticks_avg(tsc_t *tsc)
+static inline uint64_t
+tsc_cnt(tsc_t *tsc)
 {
-	return (double)tsc_getticks(tsc) / (double)tsc->cnt;
+	assert(tsc->cnt % 2 == 0 && "counter still running");
+	return tsc->cnt / 2;
+}
+
+static inline uint64_t
+tsc_avg_uint64(tsc_t *tsc)
+{
+	assert(tsc->cnt % 2 == 0);
+	uint64_t cnt = tsc_cnt(tsc);
+	return cnt == 0 ? 0: tsc_getticks(tsc) / cnt;
 }
 
 static inline double
-tsc_getticks_max(tsc_t *tsc)
+tsc_avg(tsc_t *tsc)
+{
+	assert(tsc->cnt % 2 == 0);
+	uint64_t cnt = tsc_cnt(tsc);
+	return cnt == 0 ? 0.0 : (double)tsc_getticks(tsc) / (double)cnt;
+}
+
+static inline uint64_t
+tsc_max(tsc_t *tsc)
 {
 	#if defined(TSC_MINMAX)
-	return (double)tsc->max;
+	return tsc->max;
 	#else
-	return tsc_getticks_avg(tsc);
+	return tsc_avg_uint64(tsc);
 	#endif
 }
 
-static inline double
-tsc_getticks_min(tsc_t *tsc)
+static inline uint64_t
+tsc_min(tsc_t *tsc)
 {
 	#if defined(TSC_MINMAX)
-	return (double)tsc->min;
+	return tsc->min;
 	#else
-	return tsc_getticks_avg(tsc);
+	return tsc_avg_uint64(tsc);
 	#endif
 }
 
@@ -189,7 +206,7 @@ static inline void tsc_spinticks(uint64_t ticks)
 }
 
 static inline char *
-tsc_ul_hstr(unsigned long ul)
+tsc_u64_hstr(uint64_t ul)
 {
 	#define UL_HSTR_NR 16
 	static __thread int i=0;
@@ -220,14 +237,64 @@ tsc_ul_hstr(unsigned long ul)
 
 static inline void tsc_report_ticks(char *prefix, uint64_t ticks)
 {
-	printf("%-20s %s ticks [%13lu]\n", prefix, tsc_ul_hstr(ticks), ticks);
+	printf("%20s: %s ticks [%13lu]\n", prefix, tsc_u64_hstr(ticks), ticks);
 }
 
-static inline void tsc_report(char *prefix, tsc_t *tsc)
+static inline void
+tsc_report(const char *prefix, tsc_t *tsc)
+{
+	uint64_t ticks = tsc_getticks(tsc);
+	printf("%26s: ticks:%7s [%13"PRIu64"]"
+	              " cnt:%7s [%13"PRIu64"]"
+	              " min:%7s [%13"PRIu64"]"
+	              " max:%7s [%13"PRIu64"]"
+	              " avg:%14.2lf\n",
+	         prefix,
+	         tsc_u64_hstr(ticks),     ticks,
+	         tsc_u64_hstr(tsc_cnt(tsc)), tsc_cnt(tsc),
+	         tsc_u64_hstr(tsc_min(tsc)), tsc_min(tsc),
+	         tsc_u64_hstr(tsc_max(tsc)), tsc_max(tsc),
+	         tsc_avg(tsc));
+}
+
+#define TSC_REPFL_ZEROES 0x1
+
+// report and percentages based on total ticks
+static inline void
+tsc_report_perc(const char *prefix, tsc_t *tsc, uint64_t total_ticks,
+                unsigned long flags)
+{
+	if (!(flags & TSC_REPFL_ZEROES) && (tsc_cnt(tsc) == 0) )
+		return;
+
+	uint64_t ticks = tsc_getticks(tsc);
+	printf("%26s: ticks:%7s [%13"PRIu64"]"
+	              " (%5.1lf%%)"
+	              " cnt:%7s [%13"PRIu64"]"
+	              " min:%7s [%13"PRIu64"]"
+	              " max:%7s [%13"PRIu64"]"
+	              " avg:%14.2lf\n",
+	         prefix,
+	         tsc_u64_hstr(ticks),     ticks,
+	         ((double)ticks*100.0)/(double)total_ticks,
+	         tsc_u64_hstr(tsc_cnt(tsc)), tsc_cnt(tsc),
+	         tsc_u64_hstr(tsc_min(tsc)), tsc_min(tsc),
+	         tsc_u64_hstr(tsc_max(tsc)), tsc_max(tsc),
+	         tsc_avg(tsc));
+}
+
+static inline void tsc_report_old(char *prefix, tsc_t *tsc)
 {
 	uint64_t ticks = tsc_getticks(tsc);
 	tsc_report_ticks(prefix, ticks);
 }
+
+#define TSC_UPDATE(tsc, code) \
+do { \
+	tsc_start(tsc); \
+	do { code } while (0); \
+	tsc_pause(tsc); \
+} while (0);
 
 #define TSC_MEASURE(tsc_, code_)               \
 tsc_t tsc_  = ({                               \

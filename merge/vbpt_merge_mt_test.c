@@ -54,10 +54,10 @@ struct merge_thr_stats {
 	unsigned long      commit_attempts;
 	vbpt_mm_stats_t    mm_stats;
 	unsigned long      tid;
-	uint64_t           txtree_alloc_ticks;
-	uint64_t           insert_ticks;
-	uint64_t           finalize_ticks;
-	uint64_t           commit_ticks;
+	tsc_t              txtree_alloc;
+	tsc_t              insert;
+	tsc_t              finalize;
+	tsc_t              commit;
 	struct vbpt_stats  vbpt_stats;
 };
 
@@ -69,7 +69,7 @@ struct merge_thr_arg {
 	unsigned                ntxs;
 	unsigned                id;
 	unsigned                cpu;
-	uint64_t                ticks;
+	tsc_t                   thread_ticks;
 	spinlock_t              *lock;
 	struct merge_thr_stats  stats;
 	#if defined(DO_VERIFY)
@@ -91,33 +91,34 @@ params_print(struct params *ps)
 static void
 merge_thr_print_stats(struct merge_thr_arg *arg)
 {
+	uint64_t total = tsc_getticks(&arg->thread_ticks);
 	#define pr_ticks(x__) do { \
-		double p__ = (double)s->x__ / (double)arg->ticks; \
-		char  *s__ = tsc_ul_hstr(s->x__); \
-		if (p__ < 0.1) \
-			break; \
-		printf("\t" # x__ ": %s (%.1lf%%)\n", s__, p__*100); \
+		tsc_report_perc( "" # x__, \
+		                 &s->x__, \
+		                 total, \
+		                 0); \
 	} while (0)
 
 	struct merge_thr_stats *s = &arg->stats;
-	printf("  ticks: %7.1lfm", (double)arg->ticks/(1000.0*1000.0));
-	printf("  commit attempts: %5lu", s->commit_attempts);
-	printf("  successes: %5lu", s->successes);
-	printf("  merges: %5lu", s->merges);
-	printf("  failures: %5lu", s->failures);
-	printf("  merge failures: %5lu\n", s->merge_failures);
+	tsc_report_perc("total", &arg->thread_ticks, total, 0);
+	pr_ticks(txtree_alloc);
+	pr_ticks(insert);
+	pr_ticks(finalize);
+	pr_ticks(commit);
+
 	//pr_ticks(merge_stats.merge_ticks);
-	pr_ticks(txtree_alloc_ticks);
-	pr_ticks(insert_ticks);
-	pr_ticks(finalize_ticks);
-	pr_ticks(commit_ticks);
 	//printf("  Merge Stats:\n");
 	//uint64_t merge_ticks = s->merge_stats.merge_ticks;
 	//printf("\tmerge ticks: %lu [merge/total:%lf]\n",
 	//         merge_ticks, (double)merge_ticks/(double)arg->ticks);
 	//vbpt_merge_stats_do_report("\t", &s->merge_stats);
 	//printf("\tmm_allocations: %lu\n", s->mm_stats.nodes_allocated);
-	vbpt_mm_stats_report("  ", &s->mm_stats);
+
+	printf("  commit attempts: %5lu", s->commit_attempts);
+	printf("  successes: %5lu", s->successes);
+	printf("  merges: %5lu", s->merges);
+	printf("  failures: %5lu", s->failures);
+	printf("  merge failures: %5lu\n", s->merge_failures);
 }
 
 static void *
@@ -126,14 +127,16 @@ merge_test_thr(void *arg_)
 	struct merge_thr_arg *arg = (struct merge_thr_arg *)arg_;
 
 	vbpt_mtree_t *mtree = arg->mtree;
-	arg->stats = (struct merge_thr_stats){0};
+
+	bzero(&arg->stats, sizeof(arg->stats));
 	vbpt_mm_init();
 	vbpt_stats_init();
 	setaffinity_oncpu(arg->cpu);
 	arg->stats.tid = gettid();
 
 	pthread_barrier_wait(arg->barrier);
-	tsc_t tsc; tsc_init(&tsc); tsc_start(&tsc);
+	tsc_init(&arg->thread_ticks); tsc_start(&arg->thread_ticks);
+
 	for (unsigned i=0; i<arg->ntxs; i++) {
 		//tsc_spinticks(10000);
 		unsigned fails = 0;
@@ -142,24 +145,24 @@ merge_test_thr(void *arg_)
 			old_xdist = *arg->wl;
 			// start a transaction
 			vbpt_txtree_t *txt;
-			TSC_ADD_TICKS(arg->stats.txtree_alloc_ticks, {
+			TSC_UPDATE(&arg->stats.txtree_alloc, {
 				txt = vbpt_txtree_alloc(mtree);
 			})
 			//tmsg("forked %zd from %zd\n",
 			//      txt->tree->ver->v_id, txt->bver->v_id);
-			TSC_ADD_TICKS(arg->stats.insert_ticks, {
+			TSC_UPDATE(&arg->stats.insert, {
 				//vbpt_logtree_insert_rand(txt->tree,
 				//                          arg->wl,
 				//                          &seed);
 				vbpt_logtree_kv_inc_rand(txt->tree, arg->wl);
 			})
-			TSC_ADD_TICKS(arg->stats.finalize_ticks, {
+			TSC_UPDATE(&arg->stats.finalize, {
 				vbpt_logtree_finalize(txt->tree);
 			})
 
 			arg->stats.commit_attempts++;
 			vbpt_txt_res_t ret;
-			TSC_ADD_TICKS(arg->stats.commit_ticks, {
+			TSC_UPDATE(&arg->stats.commit, {
 				//ret = vbpt_txt_try_commit(txt, mtree, 4);
 				ret = vbpt_txt_try_commit2(txt, mtree);
 			})
@@ -183,8 +186,8 @@ merge_test_thr(void *arg_)
 			//if (fails > 32) assert(false && "Something's wrong here");
 		}
 	}
-	tsc_pause(&tsc);
-	arg->ticks = tsc_getticks(&tsc);
+
+	tsc_pause(&arg->thread_ticks);
 	pthread_barrier_wait(arg->barrier);
 	vbpt_mm_stats_get(&arg->stats.mm_stats);
 	vbpt_stats_get(&arg->stats.vbpt_stats);
@@ -259,7 +262,6 @@ vbpt_mt_merge_test(unsigned nthreads, unsigned *cpus,
 
 	#if defined(DO_VERIFY)
 	for (unsigned i=0; i < nthreads; i++) {
-		xdist_print(&args[i].wl_copy);
 		for (size_t tx=0; tx < ntxs; tx++) {
 			uint64_t x;
 			xdist_for_each(&args[i].wl_copy, x) {
@@ -283,15 +285,17 @@ vbpt_mt_merge_test(unsigned nthreads, unsigned *cpus,
 	//tc_malloc_stats();
 	vbpt_mtree_dealloc(mtree, NULL);
 
-	printf("nthreads:%u, ticks/op:%-8s total_ticks:%5s, ntxs:%lu\n",
+	printf("nthreads:%u ticks_per_op:%lu total_ticks:%5s, ntxs:%lu\n",
 	        nthreads,
-	        tsc_ul_hstr(thr_ticks/(ntxs*total_ops)),
-	        tsc_ul_hstr(thr_ticks),
+	        thr_ticks/(ntxs*total_ops),
+	        tsc_u64_hstr(thr_ticks),
 	        ntxs);
+	tsc_report_ticks("ALL_ticks", thr_ticks);
 	for (unsigned i=0; i<nthreads; i++) {
-		printf("T: %2u [tid:%lu] ", i, args[i].stats.tid);
+		printf("T: %2u [tid:%lu]\n", i, args[i].stats.tid);
 		merge_thr_print_stats(args+i);
 		vbpt_stats_do_report(" ", &args[i].stats.vbpt_stats, thr_ticks);
+		vbpt_mm_stats_report("  ", &args[i].stats.mm_stats);
 	}
 }
 
@@ -333,12 +337,10 @@ int main(int argc, const char *argv[])
 	unsigned int ncpus, *cpus;
 	mt_get_options(&ncpus, &cpus);
 
-	#if 0
-	printf("Using %u cpus: ", ncpus);
+	printf("Using %u threads [cpus: ", ncpus);
 	for (unsigned int i=0; i<ncpus; i++)
 		printf("%d ", cpus[i]);
-	printf("\n");
-	#endif
+	printf("]\n");
 
 	if (argc < 2) {
 		usage(argv[0]);
@@ -358,5 +360,6 @@ int main(int argc, const char *argv[])
 
 	test_mt_rand(&params, ncpus, cpus);
 
+	printf("DONE\n");
 	return 0;
 }

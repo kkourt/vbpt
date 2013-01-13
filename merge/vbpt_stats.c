@@ -44,22 +44,7 @@ void vbpt_merge_stats_do_report(char *prefix, vbpt_merge_stats_t *st)
 
 void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 {
-	#define pr_ticks(x__) do { \
-		uint64_t t__ = tsc_getticks(&st->x__);  \
-		uint64_t c__ = st->x__.cnt;             \
-		double p__ = t__ / (double)total_ticks; \
-		if (p__ <-0.1 || c__ == 0) \
-			break; \
-		printf("%s %24s: " \
-		       "%8.1lfM (%6.1lf%%) "  \
-		       "cnt:%9lu (avg:%7.2lfK min:%7.2lfK max:%7.2lfK)\n", \
-		        prefix, "" #x__, \
-		        t__/(1000*1000.0), p__*100, \
-		        c__, \
-		        tsc_getticks_avg(&st->x__) / 1000.0,  \
-		        tsc_getticks_min(&st->x__) / 1000.0,  \
-		        tsc_getticks_max(&st->x__) / 1000.0); \
-	} while (0)
+	#define pr_ticks(x) tsc_report_perc("" #x, &st->x, total_ticks, 0)
 
 	#define pr_cnt(x__) \
 		printf("%s" "%24s" ": %lu\n", prefix, "" #x__, st->x__)
@@ -96,10 +81,10 @@ void vbpt_stats_do_report(char *prefix, vbpt_stats_t *st, uint64_t total_ticks)
 	pr_ticks(m.cur_replace);
 	pr_ticks(m.cur_init);
 
-	//pr_cnt(commit_ok);
-	//pr_cnt(commit_fail);
-	//pr_cnt(commit_merge_ok);
-	//pr_cnt(commit_merge_fail);
+	pr_cnt(commit_ok);
+	pr_cnt(commit_fail);
+	pr_cnt(commit_merge_ok);
+	pr_cnt(commit_merge_fail);
 	//pr_cnt(merge_ok);
 	//pr_cnt(merge_fail);
 	//pr_cnt(m.gc_old);
