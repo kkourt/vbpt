@@ -1,4 +1,4 @@
-for tx_keys in 32 128 256 512
+for tx_keys in 64 256 1024 4096
 do
 	for threads in $(seq 1 $(nproc))
 	do

@@ -246,15 +246,15 @@ tsc_report(const char *prefix, tsc_t *tsc)
 	uint64_t ticks = tsc_getticks(tsc);
 	printf("%26s: ticks:%7s [%13"PRIu64"]"
 	              " cnt:%7s [%13"PRIu64"]"
-	              " min:%7s [%13"PRIu64"]"
+	              " avg:%7s [%16.2lf]"
 	              " max:%7s [%13"PRIu64"]"
-	              " avg:%14.2lf\n",
+	              " min:%7s [%13"PRIu64"]\n",
 	         prefix,
-	         tsc_u64_hstr(ticks),     ticks,
-	         tsc_u64_hstr(tsc_cnt(tsc)), tsc_cnt(tsc),
-	         tsc_u64_hstr(tsc_min(tsc)), tsc_min(tsc),
-	         tsc_u64_hstr(tsc_max(tsc)), tsc_max(tsc),
-	         tsc_avg(tsc));
+	         tsc_u64_hstr(ticks),                  ticks,
+	         tsc_u64_hstr(tsc_cnt(tsc)),           tsc_cnt(tsc),
+	         tsc_u64_hstr((uint64_t)tsc_avg(tsc)), tsc_avg(tsc),
+	         tsc_u64_hstr(tsc_max(tsc)),           tsc_max(tsc),
+	         tsc_u64_hstr(tsc_min(tsc)),           tsc_min(tsc));
 }
 
 #define TSC_REPFL_ZEROES 0x1
@@ -271,16 +271,16 @@ tsc_report_perc(const char *prefix, tsc_t *tsc, uint64_t total_ticks,
 	printf("%26s: ticks:%7s [%13"PRIu64"]"
 	              " (%5.1lf%%)"
 	              " cnt:%7s [%13"PRIu64"]"
-	              " min:%7s [%13"PRIu64"]"
+	              " avg:%7s [%16.2lf]"
 	              " max:%7s [%13"PRIu64"]"
-	              " avg:%14.2lf\n",
+	              " min:%7s [%13"PRIu64"]\n",
 	         prefix,
-	         tsc_u64_hstr(ticks),     ticks,
+	         tsc_u64_hstr(ticks),                  ticks,
 	         ((double)ticks*100.0)/(double)total_ticks,
-	         tsc_u64_hstr(tsc_cnt(tsc)), tsc_cnt(tsc),
-	         tsc_u64_hstr(tsc_min(tsc)), tsc_min(tsc),
-	         tsc_u64_hstr(tsc_max(tsc)), tsc_max(tsc),
-	         tsc_avg(tsc));
+	         tsc_u64_hstr(tsc_cnt(tsc)),           tsc_cnt(tsc),
+	         tsc_u64_hstr((uint64_t)tsc_avg(tsc)), tsc_avg(tsc),
+	         tsc_u64_hstr(tsc_max(tsc)),           tsc_max(tsc),
+	         tsc_u64_hstr(tsc_min(tsc)),           tsc_min(tsc));
 }
 
 static inline void tsc_report_old(char *prefix, tsc_t *tsc)

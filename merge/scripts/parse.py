@@ -56,7 +56,7 @@ parse_conf = r'''
 	eval TS.set_thread(int(_g1))
 	eval TS.set_thread_prop('tid', int(_g2))
 
-/^ *(\w+): ticks:[^\[]*\[ *(\d+)\].*cnt:[^\[]*\[ *(\d+)\].*min:[^\[]*\[ *(\d+)\].*max:[^\[]*\[ *(\d+)\].*$/
+/^ *(\w+): ticks:[^\[]*\[ *(\d+)\].*cnt:[^\[]*\[ *(\d+)\].*max:[^\[]*\[ *(\d+)\].*min:[^\[]*\[ *(\d+)\].*$/
 	eval TS.set_thread_prop(_g1, xdict({'ticks': int(_g2), 'cnt': int(_g3), 'min': int(_g4), 'max': int(_g5)}))
 
 /^ *(\w+): *(\d+)$/
@@ -73,11 +73,12 @@ def do_parse(fname):
 	lp = LogParser(parse_conf, debug=False, globs={'TS':TS, 'xdict':xdict}, eof_flush=False)
 	lp.go(f)
 	pprint(lp.data)
-	#d = dhier_reduce_many(
-	#	lp.data,
-	#	("rles", "xarray", "nthreads"),
-	#	map_fn=lambda lod: StatList((x['ticks'] for x in lod))
-	#)
+	d = dhier_reduce_many(
+		lp.data,
+		("tx_keys", "nthreads"),
+		map_fn=lambda lod: StatList((x['ticks_per_op'] for x in lod))
+	)
+	pprint(d)
 	#return d
 
 
@@ -91,7 +92,7 @@ def do_plot(d, fname="plot.pdf"):
 	canv = canvas.init(fname=fname, format="pdf")
 	ar  = area.T(
 		x_axis  = axis.X(label="/10{}cores", format="%d"),
-		y_axis  = axis.Y(label="/10{}Mticks", format="%d"),
+		y_axis  = axis.Y(label="/10{}ticks per op", format="%d"),
 		y_range = [0,None],
 		size = (400,200)
 	)
