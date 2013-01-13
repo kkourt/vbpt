@@ -33,44 +33,64 @@ vbpt_logtree_insert_bulk(vbpt_tree_t *tree, uint64_t *ins, uint64_t ins_len)
 // rand() functions
 
 static inline void
-vbpt_logtree_insert_rand(vbpt_tree_t *tree, struct xdist_desc *d, unsigned *seed)
+vbpt_logtree_insert_rand(vbpt_tree_t *tree, struct xdist_desc *d)
 {
 	ver_t *ver = tree->ver;
 	for (uint64_t i=0; i<d->nr; i++) {
-		uint64_t key = xdist_rand(d, seed);
+		uint64_t key = xdist_rand(d);
 		vbpt_leaf_t *leaf = vbpt_leaf_alloc(VBPT_LEAF_SIZE, ver);
 		vbpt_logtree_insert(tree, key, leaf, NULL);
 	}
 }
 
 static inline void
-vbpt_tree_insert_rand(vbpt_tree_t *tree, struct xdist_desc *d, unsigned *seed)
+vbpt_tree_insert_rand(vbpt_tree_t *tree, struct xdist_desc *d)
 {
 	ver_t *ver = tree->ver;
 	for (uint64_t i=0; i<d->nr; i++) {
-		uint64_t key = xdist_rand(d, seed);
+		uint64_t key = xdist_rand(d);
 		vbpt_leaf_t *leaf = vbpt_leaf_alloc(VBPT_LEAF_SIZE, ver);
 		vbpt_insert(tree, key, leaf, NULL);
 	}
 }
 
 static inline void
-vbpt_kv_insert_rand(vbpt_tree_t *tree, struct xdist_desc *d, unsigned *seed)
+vbpt_kv_insert_rand(vbpt_tree_t *tree, struct xdist_desc *d)
 {
 	for (uint64_t i=0; i<d->nr; i++) {
-		uint64_t key = xdist_rand(d, seed);
+		uint64_t key = xdist_rand(d);
 		uint64_t val = key;
 		vbpt_kv_insert(tree, key, val);
 	}
 }
 
 static inline void
-vbpt_logtree_kv_insert_rand(vbpt_tree_t *tree, struct xdist_desc *d, unsigned *s)
+vbpt_kv_insert_val_rand(vbpt_tree_t *tree, struct xdist_desc *d, uint64_t val)
 {
 	for (uint64_t i=0; i<d->nr; i++) {
-		uint64_t key = xdist_rand(d, s);
+		uint64_t key = xdist_rand(d);
+		vbpt_kv_insert(tree, key, val);
+	}
+}
+
+
+static inline void
+vbpt_logtree_kv_insert_rand(vbpt_tree_t *t, struct xdist_desc *d)
+{
+	for (uint64_t i=0; i<d->nr; i++) {
+		uint64_t key = xdist_rand(d);
 		uint64_t val = key;
-		vbpt_logtree_kv_insert(tree, key, val);
+		vbpt_logtree_kv_insert(t, key, val);
+	}
+}
+
+static inline void
+vbpt_logtree_kv_inc_rand(vbpt_tree_t *t, struct xdist_desc *d)
+{
+	for (uint64_t i=0; i<d->nr; i++) {
+		uint64_t key = xdist_rand(d);
+		uint64_t val = vbpt_logtree_kv_get(t, key);
+		vbpt_logtree_kv_insert(t, key, val + 1);
 	}
 }
 

@@ -3,7 +3,9 @@
 
 #if !defined(VBPT_KV_DEFVAL)
 #define VBPT_KV_DEFVALBYTE  0xf1 // so that we can use memset()
-#define VBPT_KV_DEFVAL      0xf1f1f1f1f1f1f1f1
+#define VBPT_KV_DEFVAL      0xf1f1f1f1f1f1f1f1ULL
+//#define VBPT_KV_DEFVALBYTE  0
+//#define VBPT_KV_DEFVAL      (0ULL)
 #endif
 
 void vbpt_kv_insert(vbpt_tree_t *tree, uint64_t kv_key, uint64_t kv_val);

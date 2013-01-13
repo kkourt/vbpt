@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <inttypes.h>
 #include <pthread.h>
 
 #include "ver.h"
@@ -10,6 +11,7 @@
 #include "vbpt_tx.h"
 #include "vbpt_kv.h"
 #include "vbpt_test.h"
+#include "vbpt_stats.h"
 
 #include "tsc.h"
 #include "array_size.h"
@@ -24,13 +26,15 @@
 #define DEF_TX_RANGE  128
 #define DEF_NTXS      (16*1024)
 
-#define DEF_PARAMS { \
-	DEF_RANGE_LEN,  \
-	DEF_INS0,       \
-	DEF_TX_KEYS,    \
-	DEF_TX_RANGE,   \
-	DEF_NTXS        \
+#define DEF_PARAMS {\
+    DEF_RANGE_LEN,  \
+    DEF_INS0,       \
+    DEF_TX_KEYS,    \
+    DEF_TX_RANGE,   \
+    DEF_NTXS        \
 }
+
+#define DO_VERIFY // verify results
 
 // test parameters
 struct params {
@@ -68,6 +72,9 @@ struct merge_thr_arg {
 	uint64_t                ticks;
 	spinlock_t              *lock;
 	struct merge_thr_stats  stats;
+	#if defined(DO_VERIFY)
+	struct xdist_desc       wl_copy;
+	#endif
 };
 
 static void
@@ -119,7 +126,6 @@ merge_test_thr(void *arg_)
 	struct merge_thr_arg *arg = (struct merge_thr_arg *)arg_;
 
 	vbpt_mtree_t *mtree = arg->mtree;
-	unsigned seed = arg->wl->seed;
 	arg->stats = (struct merge_thr_stats){0};
 	vbpt_mm_init();
 	vbpt_stats_init();
@@ -131,8 +137,9 @@ merge_test_thr(void *arg_)
 	for (unsigned i=0; i<arg->ntxs; i++) {
 		//tsc_spinticks(10000);
 		unsigned fails = 0;
+		struct xdist_desc old_xdist;
 		while (1) {
-			unsigned old_seed = seed;
+			old_xdist = *arg->wl;
 			// start a transaction
 			vbpt_txtree_t *txt;
 			TSC_ADD_TICKS(arg->stats.txtree_alloc_ticks, {
@@ -141,8 +148,10 @@ merge_test_thr(void *arg_)
 			//tmsg("forked %zd from %zd\n",
 			//      txt->tree->ver->v_id, txt->bver->v_id);
 			TSC_ADD_TICKS(arg->stats.insert_ticks, {
-				//vbpt_logtree_insert_rand(txt->tree,arg->wl, &seed);
-				vbpt_logtree_kv_insert_rand(txt->tree, arg->wl, &seed);
+				//vbpt_logtree_insert_rand(txt->tree,
+				//                          arg->wl,
+				//                          &seed);
+				vbpt_logtree_kv_inc_rand(txt->tree, arg->wl);
 			})
 			TSC_ADD_TICKS(arg->stats.finalize_ticks, {
 				vbpt_logtree_finalize(txt->tree);
@@ -156,11 +165,11 @@ merge_test_thr(void *arg_)
 			})
 			//tmsg("RET:%s\n", vbpt_txt_res2str[ret]);
 			if (ret == VBPT_COMMIT_FAILED) {
-				seed = old_seed;
+				*(arg->wl) = old_xdist;
 				fails++;
 				arg->stats.failures++;
 			} else if (ret == VBPT_COMMIT_MERGE_FAILED) {
-				seed = old_seed;
+				*(arg->wl) = old_xdist;
 				fails++;
 				arg->stats.merge_failures++;
 			} else if  (ret == VBPT_COMMIT_OK) {
@@ -183,15 +192,38 @@ merge_test_thr(void *arg_)
 }
 
 static void
-vbpt_mt_merge_test(vbpt_tree_t *tree,
-                   unsigned nthreads, unsigned *cpus,
+vbpt_mt_merge_test(unsigned nthreads, unsigned *cpus,
                    struct xdist_desc *wls,
+                   struct xdist_desc *wl0,
                    uint64_t ntxs)
 {
 	pthread_barrier_t    barrier;
 	spinlock_t           lock;
 	struct merge_thr_arg args[nthreads];
 	pthread_t            tids[nthreads];
+
+	// print distributions
+	printf(" I> ");xdist_print(wl0);
+	for (unsigned i=0; i<nthreads; i++) {
+		printf("%2d> ", i); xdist_print(wls + i);
+	}
+
+	#if defined(DO_VERIFY)
+	struct xdist_desc wl0_copy = *wl0;
+	size_t verify_size         = wl0_copy.r_len*sizeof(uint64_t);
+	uint64_t *verify           = xmalloc(verify_size);
+	uint64_t x;
+	memset(verify, VBPT_KV_DEFVALBYTE, verify_size);
+	xdist_for_each(&wl0_copy, x) {
+		verify[x] = 1;
+	}
+	#endif
+
+	// allocate and initialize inital tree
+	vbpt_tree_t *tree = vbpt_tree_create();
+	//vbpt_tree_insert_rand(tree, wl0, &seed);
+	vbpt_kv_insert_val_rand(tree, wl0, 1);
+
 
 	vbpt_mtree_t *mtree = vbpt_mtree_alloc(tree);
 
@@ -211,6 +243,9 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 		arg->cpu     = cpus[i];
 		pthread_create(tids+i, NULL, merge_test_thr, arg);
 		total_ops += arg->wl->nr;
+		#if defined(DO_VERIFY)
+		arg->wl_copy = *(arg->wl);
+		#endif
 	}
 
 	pthread_barrier_wait(&barrier);
@@ -221,6 +256,29 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 	for (unsigned i=0; i<nthreads; i++) {
 		pthread_join(tids[i], NULL);
 	}
+
+	#if defined(DO_VERIFY)
+	for (unsigned i=0; i < nthreads; i++) {
+		xdist_print(&args[i].wl_copy);
+		for (size_t tx=0; tx < ntxs; tx++) {
+			uint64_t x;
+			xdist_for_each(&args[i].wl_copy, x) {
+				verify[x] += 1;
+			}
+		}
+	}
+	for (uint64_t k=0; k < wl0_copy.r_len; k++) {
+		uint64_t vbpt_val = vbpt_kv_get(mtree->mt_tree, k);
+		uint64_t verf_val = verify[k];
+		if (vbpt_val != verf_val) {
+			printf(" k=%" PRIu64 ":"
+			       " vbpt_val=%" PRIu64
+			       " verf_val=%" PRIu64 "\n",
+			       k, vbpt_val, verf_val);
+			abort();
+		}
+	}
+	#endif
 
 	//tc_malloc_stats();
 	vbpt_mtree_dealloc(mtree, NULL);
@@ -235,30 +293,6 @@ vbpt_mt_merge_test(vbpt_tree_t *tree,
 		merge_thr_print_stats(args+i);
 		vbpt_stats_do_report(" ", &args[i].stats.vbpt_stats, thr_ticks);
 	}
-}
-
-static void __attribute__((unused))
-do_test_mt_rand(struct params *ps,
-                struct xdist_desc *d0,
-                unsigned nthreads, unsigned *cpus,
-                struct xdist_desc *ds)
-{
-
-	printf(" I> start:%6lu len:%6lu nr:%6lu seed:%u\n",
-	       d0->r_start, d0->r_len, d0->nr, d0->seed);
-	for (unsigned i=0; i<nthreads; i++) {
-		struct xdist_desc *d = ds + i;
-		printf("%2d> start:%6lu len:%6lu nr:%6lu seed:%u\n",
-		       i, d->r_start, d->r_len, d->nr, d->seed);
-	}
-
-
-	vbpt_tree_t *tree = vbpt_tree_create();
-	unsigned seed = d0->seed;
-	//vbpt_tree_insert_rand(tree, d0, &seed);
-	vbpt_kv_insert_rand(tree, d0, &seed);
-
-	vbpt_mt_merge_test(tree, nthreads, cpus, ds, ps->ntxs);
 }
 
 static void __attribute__((unused))
@@ -282,7 +316,7 @@ test_mt_rand(struct params *ps, unsigned nr_threads, unsigned *cpus)
 		d->seed    = 1;
 	}
 
-	do_test_mt_rand(ps, &d0, nr_threads, cpus, dt);
+	vbpt_mt_merge_test(nr_threads, cpus, dt, &d0, ps->ntxs);
 }
 
 static void
@@ -296,14 +330,9 @@ usage(const char *prog)
 
 int main(int argc, const char *argv[])
 {
-	// initialize with default values
-	#if 0
-	//do_test_mt_rand(&d0, 1, ds);
-	//do_test_mt_rand(&d0, 2, ds);
-	#endif
-
 	unsigned int ncpus, *cpus;
 	mt_get_options(&ncpus, &cpus);
+
 	#if 0
 	printf("Using %u cpus: ", ncpus);
 	for (unsigned int i=0; i<ncpus; i++)

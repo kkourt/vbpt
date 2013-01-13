@@ -6,6 +6,7 @@ vbpt_merge_mt_test
 vbpt_file_test
 perf.data*
 ver_test
+xdist_test
 fbench-*
 tbench-*
 core
