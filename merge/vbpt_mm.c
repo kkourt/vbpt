@@ -161,6 +161,7 @@ vbpt_node_dealloc(vbpt_node_t *node)
 /**
  * allocate a new leaf
  *  Version's refcount will be increased
+ *  @leaf_size is the total size of the data allocated for the leaf
  */
 vbpt_leaf_t *
 vbpt_leaf_alloc(size_t leaf_size, ver_t *ver)
